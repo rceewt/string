@@ -1,63 +1,126 @@
-----------------------------------------------------------------
--- MAIN TAB – SILENT AIM (vložit za log('Main tab built'))
-----------------------------------------------------------------
-local UIS = game:GetService('UserInputService')
+-- LinoriaLib menu: Main | Visuals (ESP) | Settings
+-- OPRAVENO: Chybějící otevírací blok pcall u ESP + deklarace ESPCleanup.
+-- Bez těchto řádků skript okamžitě padá na syntax error a vůbec se nespustí.
 
--- Konfigurační tabulka silent aimu
+local t0 = tick()
+local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
+
+local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
+
+local env = getgenv and getgenv() or _G
+if env.__MenuLibrary then
+    pcall(function() env.__MenuLibrary:Unload() end)
+    env.__MenuLibrary = nil
+    task.wait(0.2)
+end
+
+local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+env.__MenuLibrary = Library
+log('Library loaded')
+
+local RunService = game:GetService('RunService')
+local Players = game:GetService('Players')
+local Stats = game:GetService('Stats')
+local UIS = game:GetService('UserInputService')
+local LocalPlayer = Players.LocalPlayer
+
+local Window = Library:CreateWindow({
+    Title = 'Example menu',
+    Center = true,
+    AutoShow = true,
+    TabPadding = 8,
+    MenuFadeTime = 0,
+})
+
+local Tabs = {}
+Tabs.Main = Window:AddTab('Main')
+Tabs.Visuals = Window:AddTab('Visuals')
+Tabs.Settings = Window:AddTab('Settings')
+
+----------------------------------------------------------------
+-- MAIN TAB
+----------------------------------------------------------------
+local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Silent Aim')
+
 local SilentAim = {
-    Enabled   = false,   -- hlavní vypínač
-    AlwaysOn  = false,   -- ignorovat klávesu a mířit neustále
-    KeyHeld   = false,   -- je klávesa právě stisknutá?
-    Key       = 'E',     -- výchozí klávesa (záložní, primárně se čte z KeyPickeru)
-    FOV       = 150,     -- poloměr FOV v pixelech od středu obrazovky
-    Part      = 'Head',  -- cílová část těla
-    TeamCheck = true,    -- ignorovat spoluhráče
-    WallCheck = false,   -- ignorovat hráče za zdí
-    ShowFOV   = true,    -- kreslit kruh FOV
-    Target    = nil,     -- cachovaný cíl aktuálního framu
+    Enabled = false, AlwaysOn = false, KeyHeld = false, Key = 'E',
+    FOV = 150, Part = 'Head', TeamCheck = true, WallCheck = false,
+    ShowFOV = true, Target = nil,
 }
 
--- Převede název klávesy ("E") na Enum.KeyCode
+LeftGroupBox:AddToggle('SAEnabled', { Text = 'Enable Silent Aim', Default = false, Tooltip = 'Hlavni vypinac' })
+    :OnChanged(function(v) SilentAim.Enabled = v end)
+
+LeftGroupBox:AddToggle('SAAlways', { Text = 'Always On (ignore key)', Default = false })
+    :OnChanged(function(v) SilentAim.AlwaysOn = v end)
+
+LeftGroupBox:AddLabel('Aim key'):AddKeyPicker('SAKey', {
+    Default = 'E', NoUI = false, Text = 'Aim key', Mode = 'Hold',
+})
+
+LeftGroupBox:AddSlider('SAFOV', { Text = 'FOV (px)', Default = 150, Min = 10, Max = 800, Rounding = 1, Compact = false })
+    :OnChanged(function(v)
+        SilentAim.FOV = v
+        if fovCircle then fovCircle.Radius = v end
+    end)
+
+LeftGroupBox:AddDropdown('SAPart', {
+    Values = { 'Head', 'UpperTorso', 'LowerTorso', 'HumanoidRootPart', 'Torso' },
+    Default = 1, Multi = false, Text = 'Target part',
+}):OnChanged(function(v) SilentAim.Part = v end)
+
+LeftGroupBox:AddToggle('SATeam', { Text = 'Team check', Default = true })
+    :OnChanged(function(v) SilentAim.TeamCheck = v end)
+
+LeftGroupBox:AddToggle('SAWall', { Text = 'Wall check', Default = false })
+    :OnChanged(function(v) SilentAim.WallCheck = v end)
+
+local fovToggle = LeftGroupBox:AddToggle('SAFovDraw', { Text = 'Draw FOV circle', Default = true })
+fovToggle:OnChanged(function(v)
+    SilentAim.ShowFOV = v
+    if fovCircle then fovCircle.Visible = (v and SilentAim.Enabled) end
+end)
+fovToggle:AddColorPicker('SAFovColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'FOV color' })
+    :OnChanged(function(c) if fovCircle then fovCircle.Color = c end end)
+
+log('Main tab built')
+task.wait()
+
+----------------------------------------------------------------
+-- SILENT AIM LOGIKA
+----------------------------------------------------------------
 local function keyCodeFromName(name)
     local ok, code = pcall(function() return Enum.KeyCode[name] end)
     if ok then return code end
     return nil
 end
 
--- Vrátí aktuálně nastavenou klávesu z KeyPickeru (fallback na výchozí)
 local function currentKey()
     local opt = Options and Options.SAKey
     if opt and type(opt.Value) == 'string' then return opt.Value end
     return SilentAim.Key
 end
 
--- Sledování stisku / uvolnění klávesy
 UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    if Library and Library.Open then return end -- ignorovat psaní do menu
+    if Library and Library.Open then return end
     local code = keyCodeFromName(currentKey())
-    if code and input.KeyCode == code then
-        SilentAim.KeyHeld = true
-    end
+    if code and input.KeyCode == code then SilentAim.KeyHeld = true end
 end)
 
 UIS.InputEnded:Connect(function(input, gp)
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     local code = keyCodeFromName(currentKey())
-    if code and input.KeyCode == code then
-        SilentAim.KeyHeld = false
-    end
+    if code and input.KeyCode == code then SilentAim.KeyHeld = false end
 end)
 
--- Je silent aim právě aktivní?
 local function isActive()
     if not SilentAim.Enabled then return false end
     if SilentAim.AlwaysOn then return true end
     return SilentAim.KeyHeld
 end
 
--- Vybere nejbližší platný cíl v rámci FOV (střed obrazovky)
 local function getTargetPart()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
@@ -73,11 +136,8 @@ local function getTargetPart()
                 local hum = char:FindFirstChildOfClass('Humanoid')
                 if hum and hum.Health > 0 then
                     local skip = false
-                    -- Kontrola týmu
                     if SilentAim.TeamCheck and plr.Team and LocalPlayer.Team
-                       and plr.Team == LocalPlayer.Team then
-                        skip = true
-                    end
+                       and plr.Team == LocalPlayer.Team then skip = true end
                     if not skip then
                         local part = char:FindFirstChild(SilentAim.Part)
                         if part then
@@ -85,19 +145,14 @@ local function getTargetPart()
                             if onScreen then
                                 local d = (Vector2.new(sp.X, sp.Y) - origin).Magnitude
                                 if d <= bestDist then
-                                    -- Kontrola zdí
                                     if SilentAim.WallCheck then
                                         local params = RaycastParams.new()
                                         params.FilterType = Enum.RaycastFilterType.Exclude
                                         params.FilterDescendantsInstances = { LocalPlayer.Character, cam }
                                         local res = workspace:Raycast(camPos, part.Position - camPos, params)
-                                        if res and not res.Instance:IsDescendantOf(char) then
-                                            skip = true
-                                        end
+                                        if res and not res.Instance:IsDescendantOf(char) then skip = true end
                                     end
-                                    if not skip then
-                                        bestPart, bestDist = part, d
-                                    end
+                                    if not skip then bestPart, bestDist = part, d end
                                 end
                             end
                         end
@@ -109,63 +164,6 @@ local function getTargetPart()
     return bestPart
 end
 
-----------------------------------------------------------------
--- UI PRO SILENT AIM (přidáno do pravého sloupce záložky Main)
-----------------------------------------------------------------
-local SAGroup = Tabs.Main:AddRightGroupbox('Silent Aim')
-
-SAGroup:AddToggle('SAEnabled', {
-    Text = 'Zapnout silent aim',
-    Default = false,
-    Tooltip = 'Hlavní vypínač silent aimu',
-}):OnChanged(function(v) SilentAim.Enabled = v end)
-
-SAGroup:AddToggle('SAAlways', {
-    Text = 'Vždy aktivní (ignorovat klávesu)',
-    Default = false,
-}):OnChanged(function(v) SilentAim.AlwaysOn = v end)
-
-SAGroup:AddKeyPicker('SAKey', {
-    Default = 'E',
-    NoUI = false,
-    Text = 'Klávesa míření',
-    Mode = 'Hold',
-})
-
-SAGroup:AddSlider('SAFOV', {
-    Text = 'FOV (px)',
-    Default = 150,
-    Min = 10,
-    Max = 800,
-    Rounding = 0,
-    Compact = false,
-}):OnChanged(function(v) SilentAim.FOV = v end)
-
-SAGroup:AddDropdown('SAPart', {
-    Values = { 'Head', 'UpperTorso', 'LowerTorso', 'HumanoidRootPart', 'Torso' },
-    Default = 1,
-    Multi = false,
-    Text = 'Cílová část',
-}):OnChanged(function(v) SilentAim.Part = v end)
-
-SAGroup:AddToggle('SATeam', {
-    Text = 'Kontrola týmu',
-    Default = true,
-}):OnChanged(function(v) SilentAim.TeamCheck = v end)
-
-SAGroup:AddToggle('SAWall', {
-    Text = 'Kontrola zdí (viditelnost)',
-    Default = false,
-}):OnChanged(function(v) SilentAim.WallCheck = v end)
-
-SAGroup:AddToggle('SAFovDraw', {
-    Text = 'Kreslit FOV kruh',
-    Default = true,
-}):OnChanged(function(v) SilentAim.ShowFOV = v end)
-
-----------------------------------------------------------------
--- FOV KRUH (Drawing)
-----------------------------------------------------------------
 local fovCircle
 if Drawing then
     fovCircle = Drawing.new('Circle')
@@ -178,21 +176,20 @@ if Drawing then
     fovCircle.Visible = false
 end
 
-local fovConn = RunService.RenderStepped:Connect(function()
-    -- Cachování cíle pro aktuální frame (aby se nevolalo při každém raycastu)
+RunService.RenderStepped:Connect(function()
     if isActive() then
         SilentAim.Target = getTargetPart()
     else
         SilentAim.Target = nil
     end
 
-    -- Vykreslení FOV kruhu
     if fovCircle then
         local cam = workspace.CurrentCamera
         if SilentAim.Enabled and SilentAim.ShowFOV and cam then
             local vp = cam.ViewportSize
             fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
             fovCircle.Radius = SilentAim.FOV
+            if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
             fovCircle.Visible = true
         else
             fovCircle.Visible = false
@@ -200,9 +197,6 @@ local fovConn = RunService.RenderStepped:Connect(function()
     end
 end)
 
-----------------------------------------------------------------
--- METATABLE HOOK – přesměrování paprsků na cachovaný cíl
-----------------------------------------------------------------
 local oldNamecall
 oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -210,7 +204,6 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
     if SilentAim.Target ~= nil then
         local target = SilentAim.Target
 
-        -- 1) Paprsek z kamery (ScreenPointToRay / ViewportPointToRay)
         if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
             local cam = workspace.CurrentCamera
             if cam then
@@ -224,11 +217,8 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
             end
         end
 
-        -- 2) Přímé raycasty (Raycast / FindPartOnRay*)
-        if method == 'Raycast'
-           or method == 'FindPartOnRay'
-           or method == 'FindPartOnRayWithIgnoreList'
-           or method == 'FindPartOnRayWithWhitelist' then
+        if method == 'Raycast' or method == 'FindPartOnRay'
+           or method == 'FindPartOnRayWithIgnoreList' or method == 'FindPartOnRayWithWhitelist' then
             local cam = workspace.CurrentCamera
             if cam then
                 local camPos = cam.CFrame.Position
@@ -245,3 +235,415 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
 end))
 
 log('Silent aim ready')
+
+----------------------------------------------------------------
+-- VISUALS TAB (ESP UI)
+----------------------------------------------------------------
+-- OPRAVA: Deklarace ESPCleanup a otevírací pcall blok, které v předchozí verzi chyběly
+local ESPCleanup = function() end
+local espOk, espErr = pcall(function()
+
+    local ESPGroup = Tabs.Visuals:AddLeftGroupbox('ESP')
+    local ESPSettings = Tabs.Visuals:AddRightGroupbox('ESP Settings')
+
+    ESPGroup:AddToggle('ESPEnabled', { Text = 'Enable ESP', Default = false, Tooltip = 'Master switch' })
+    ESPGroup:AddDivider()
+    ESPGroup:AddToggle('ESPBox', { Text = 'Box', Default = true })
+        :AddColorPicker('ESPBoxColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Box color' })
+    ESPGroup:AddToggle('ESPSkeleton', { Text = 'Skeleton', Default = true })
+        :AddColorPicker('ESPSkeletonColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Skeleton color' })
+    ESPGroup:AddToggle('ESPName', { Text = 'Name', Default = true })
+        :AddColorPicker('ESPNameColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Name color' })
+    ESPGroup:AddToggle('ESPDist', { Text = 'Distance', Default = true })
+        :AddColorPicker('ESPDistColor', { Default = Color3.fromRGB(200, 200, 200), Title = 'Distance color' })
+    ESPGroup:AddToggle('ESPHealth', { Text = 'Health bar', Default = true })
+    ESPGroup:AddToggle('ESPHealthText', { Text = 'Health number', Default = true })
+        :AddColorPicker('ESPHealthTextColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Health number color' })
+    ESPGroup:AddToggle('ESPWeapon', { Text = 'Held weapon', Default = true })
+        :AddColorPicker('ESPWeaponColor', { Default = Color3.fromRGB(255, 220, 120), Title = 'Weapon color' })
+
+    ESPSettings:AddToggle('ESPTeamCheck', { Text = 'Hide teammates', Default = false })
+
+    log('Visuals tab built')
+    task.wait()
+
+    local HAS_DRAWING = (Drawing ~= nil)
+
+    local ESP_TOGGLES = { 'ESPBox', 'ESPSkeleton', 'ESPName', 'ESPDist', 'ESPHealth', 'ESPHealthText', 'ESPWeapon' }
+
+    local R15_BONES = {
+        { 'Head', 'UpperTorso' }, { 'UpperTorso', 'LowerTorso' },
+        { 'UpperTorso', 'LeftUpperArm' }, { 'LeftUpperArm', 'LeftLowerArm' }, { 'LeftLowerArm', 'LeftHand' },
+        { 'UpperTorso', 'RightUpperArm' }, { 'RightUpperArm', 'RightLowerArm' }, { 'RightLowerArm', 'RightHand' },
+        { 'LowerTorso', 'LeftUpperLeg' }, { 'LeftUpperLeg', 'LeftLowerLeg' }, { 'LeftLowerLeg', 'LeftFoot' },
+        { 'LowerTorso', 'RightUpperLeg' }, { 'RightUpperLeg', 'RightLowerLeg' }, { 'RightLowerLeg', 'RightFoot' },
+    }
+    local R6_BONES = {
+        { 'Head', 'Torso' }, { 'Torso', 'Left Arm' }, { 'Torso', 'Right Arm' },
+        { 'Torso', 'Left Leg' }, { 'Torso', 'Right Leg' },
+    }
+
+    local WEAPON_ATTRS = { 'EquippedWeapon', 'CurrentWeapon', 'Weapon', 'Equipped' }
+
+    local ESP = {}
+    local espConn
+
+    local function safeRemove(d)
+        pcall(function() d:Remove() end)
+    end
+
+    local function newText(size)
+        local t = Drawing.new('Text')
+        t.Size = size
+        t.Center = true
+        t.Outline = true
+        t.Visible = false
+        return t
+    end
+
+    local function createESP(player)
+        local obj = {
+            boxOutline = Drawing.new('Square'),
+            box = Drawing.new('Square'),
+            hpOutline = Drawing.new('Square'),
+            hpBar = Drawing.new('Square'),
+            name = newText(13),
+            dist = newText(12),
+            weapon = newText(12),
+            hpText = newText(11),
+            bones = {},
+        }
+        obj.boxOutline.Thickness = 3
+        obj.boxOutline.Filled = false
+        obj.boxOutline.Color = Color3.new(0, 0, 0)
+        obj.box.Thickness = 1
+        obj.box.Filled = false
+        obj.hpOutline.Filled = true
+        obj.hpOutline.Color = Color3.new(0, 0, 0)
+        obj.hpBar.Filled = true
+        for i = 1, #R15_BONES do
+            local line = Drawing.new('Line')
+            line.Thickness = 1
+            line.Visible = false
+            obj.bones[i] = line
+        end
+        ESP[player] = obj
+        return obj
+    end
+
+    local function hideESP(obj)
+        obj.box.Visible = false
+        obj.boxOutline.Visible = false
+        obj.hpOutline.Visible = false
+        obj.hpBar.Visible = false
+        obj.hpText.Visible = false
+        obj.name.Visible = false
+        obj.dist.Visible = false
+        obj.weapon.Visible = false
+        for i = 1, #obj.bones do obj.bones[i].Visible = false end
+    end
+
+    local function removeESP(player)
+        local obj = ESP[player]
+        if not obj then return end
+        for key, d in next, obj do
+            if key == 'bones' then
+                for i = 1, #d do safeRemove(d[i]) end
+            else
+                safeRemove(d)
+            end
+        end
+        ESP[player] = nil
+    end
+
+    local function removeAllESP()
+        for player in next, ESP do removeESP(player) end
+    end
+
+    local function getWeaponName(player, char)
+        local tool = char:FindFirstChildOfClass('Tool')
+        if tool then return tool.Name end
+        for i = 1, #WEAPON_ATTRS do
+            local v = char:GetAttribute(WEAPON_ATTRS[i]) or player:GetAttribute(WEAPON_ATTRS[i])
+            if type(v) == 'string' and v ~= '' then return v end
+        end
+        return nil
+    end
+
+    local function updateESP()
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+
+        local camPos = cam.CFrame.Position
+        local showBox, showSkel = Toggles.ESPBox.Value, Toggles.ESPSkeleton.Value
+        local showName, showDist = Toggles.ESPName.Value, Toggles.ESPDist.Value
+        local showHP, showHPText = Toggles.ESPHealth.Value, Toggles.ESPHealthText.Value
+        local showWeapon = Toggles.ESPWeapon.Value
+        local teamCheck = Toggles.ESPTeamCheck.Value
+        local boxColor, skelColor = Options.ESPBoxColor.Value, Options.ESPSkeletonColor.Value
+        local nameColor, distColor = Options.ESPNameColor.Value, Options.ESPDistColor.Value
+        local hpTextColor, weaponColor = Options.ESPHealthTextColor.Value, Options.ESPWeaponColor.Value
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local obj = ESP[player] or createESP(player)
+                local char = player.Character
+                local root = char and char:FindFirstChild('HumanoidRootPart')
+                local hum = char and char:FindFirstChildOfClass('Humanoid')
+
+                local ok = root and hum and hum.Health > 0
+                if ok and teamCheck and player.Team ~= nil and player.Team == LocalPlayer.Team then ok = false end
+
+                local pos, onScreen
+                if ok then
+                    pos, onScreen = cam:WorldToViewportPoint(root.Position)
+                    if not onScreen then ok = false end
+                end
+
+                if not ok then
+                    hideESP(obj)
+                else
+                    local top = cam:WorldToViewportPoint(root.Position + Vector3.new(0, 2.7, 0))
+                    local bottom = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 3.2, 0))
+                    local h = math.abs(top.Y - bottom.Y)
+                    local w = h / 1.8
+                    local x, y = pos.X - w / 2, top.Y
+
+                    if showBox then
+                        obj.boxOutline.Size = Vector2.new(w, h)
+                        obj.boxOutline.Position = Vector2.new(x, y)
+                        obj.boxOutline.Visible = true
+                        obj.box.Size = Vector2.new(w, h)
+                        obj.box.Position = Vector2.new(x, y)
+                        obj.box.Color = boxColor
+                        obj.box.Visible = true
+                    else
+                        obj.box.Visible = false
+                        obj.boxOutline.Visible = false
+                    end
+
+                    if showName then
+                        obj.name.Text = player.DisplayName
+                        obj.name.Position = Vector2.new(pos.X, y - 16)
+                        obj.name.Color = nameColor
+                        obj.name.Visible = true
+                    else
+                        obj.name.Visible = false
+                    end
+
+                    local frac = 0
+                    if showHP or showHPText then
+                        local maxHP = hum.MaxHealth > 0 and hum.MaxHealth or 100
+                        frac = math.clamp(hum.Health / maxHP, 0, 1)
+                    end
+                    if showHP then
+                        local fillH = math.max(h * frac, 1)
+                        obj.hpOutline.Size = Vector2.new(4, h + 2)
+                        obj.hpOutline.Position = Vector2.new(x - 7, y - 1)
+                        obj.hpOutline.Visible = true
+                        obj.hpBar.Size = Vector2.new(2, fillH)
+                        obj.hpBar.Position = Vector2.new(x - 6, y + h - fillH)
+                        obj.hpBar.Color = Color3.fromRGB(255 * (1 - frac), 255 * frac, 0)
+                        obj.hpBar.Visible = true
+                    else
+                        obj.hpOutline.Visible = false
+                        obj.hpBar.Visible = false
+                    end
+                    if showHPText then
+                        local fillH = h * frac
+                        obj.hpText.Text = tostring(math.floor(hum.Health))
+                        obj.hpText.Position = Vector2.new(x - 16, y + h - fillH - 6)
+                        obj.hpText.Color = hpTextColor
+                        obj.hpText.Visible = true
+                    else
+                        obj.hpText.Visible = false
+                    end
+
+                    local by = y + h + 1
+                    local weaponName = showWeapon and getWeaponName(player, char) or nil
+                    if weaponName then
+                        obj.weapon.Text = weaponName
+                        obj.weapon.Position = Vector2.new(pos.X, by)
+                        obj.weapon.Color = weaponColor
+                        obj.weapon.Visible = true
+                        by = by + 13
+                    else
+                        obj.weapon.Visible = false
+                    end
+                    if showDist then
+                        obj.dist.Text = ('%dm'):format(math.floor((root.Position - camPos).Magnitude))
+                        obj.dist.Position = Vector2.new(pos.X, by)
+                        obj.dist.Color = distColor
+                        obj.dist.Visible = true
+                    else
+                        obj.dist.Visible = false
+                    end
+
+                    if showSkel then
+                        local list = hum.RigType == Enum.HumanoidRigType.R15 and R15_BONES or R6_BONES
+                        for i = 1, #list do
+                            local line = obj.bones[i]
+                            local a, b = char:FindFirstChild(list[i][1]), char:FindFirstChild(list[i][2])
+                            if a and b then
+                                local pa, va = cam:WorldToViewportPoint(a.Position)
+                                local pb, vb = cam:WorldToViewportPoint(b.Position)
+                                if va and vb then
+                                    line.From = Vector2.new(pa.X, pa.Y)
+                                    line.To = Vector2.new(pb.X, pb.Y)
+                                    line.Color = skelColor
+                                    line.Visible = true
+                                else
+                                    line.Visible = false
+                                end
+                            else
+                                line.Visible = false
+                            end
+                        end
+                        for i = #list + 1, #obj.bones do obj.bones[i].Visible = false end
+                    else
+                        for i = 1, #obj.bones do obj.bones[i].Visible = false end
+                    end
+                end
+            end
+        end
+    end
+
+    local function refreshESP()
+        local anyFeature = false
+        for i = 1, #ESP_TOGGLES do
+            if Toggles[ESP_TOGGLES[i]].Value then anyFeature = true break end
+        end
+        local active = Toggles.ESPEnabled.Value and anyFeature
+
+        if active and not espConn then
+            if not HAS_DRAWING then
+                Library:Notify('Your executor does not support the Drawing library, ESP unavailable.', 5)
+                Toggles.ESPEnabled:SetValue(false)
+                return
+            end
+            local lastErr
+            espConn = RunService.RenderStepped:Connect(function()
+                local ok, err = pcall(updateESP)
+                if not ok and err ~= lastErr then
+                    lastErr = err
+                    warn('[menu] ESP error: ' .. tostring(err))
+                    Library:Notify('ESP error: ' .. tostring(err), 10)
+                end
+            end)
+        elseif not active and espConn then
+            espConn:Disconnect()
+            espConn = nil
+            removeAllESP()
+        end
+    end
+
+    Toggles.ESPEnabled:OnChanged(refreshESP)
+    for i = 1, #ESP_TOGGLES do
+        Toggles[ESP_TOGGLES[i]]:OnChanged(refreshESP)
+    end
+
+    local removingConn = Players.PlayerRemoving:Connect(removeESP)
+
+    ESPCleanup = function()
+        if espConn then espConn:Disconnect() espConn = nil end
+        removingConn:Disconnect()
+        removeAllESP()
+    end
+end)
+
+if not espOk then
+    warn('[menu] ESP failed to load: ' .. tostring(espErr))
+    Library:Notify('ESP failed to load: ' .. tostring(espErr), 15)
+end
+
+----------------------------------------------------------------
+-- WATERMARK
+----------------------------------------------------------------
+Library:SetWatermarkVisibility(false)
+Library.KeybindFrame.Visible = false
+
+local WatermarkEnabled = false
+local lastText = ''
+
+task.spawn(function()
+    while not Library.Unloaded do
+        task.wait(2)
+        if WatermarkEnabled then
+            local fps = math.floor(1 / RunService.RenderStepped:Wait())
+            local ping = 0
+            pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
+            local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))
+            if text ~= lastText then
+                lastText = text
+                Library:SetWatermark(text)
+            end
+        end
+    end
+end)
+
+Library:OnUnload(function()
+    ESPCleanup()
+    if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
+    Library.Unloaded = true
+end)
+
+----------------------------------------------------------------
+-- SETTINGS
+----------------------------------------------------------------
+local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
+
+MenuGroup:AddButton({
+    Text = 'Unload',
+    Func = function() Library:Unload() end,
+    Tooltip = 'Fully removes the script',
+})
+
+MenuGroup:AddToggle('WatermarkToggle', { Text = 'Show watermark', Default = false })
+Toggles.WatermarkToggle:OnChanged(function()
+    WatermarkEnabled = Toggles.WatermarkToggle.Value
+    Library:SetWatermarkVisibility(WatermarkEnabled)
+end)
+
+MenuGroup:AddToggle('KeybindListToggle', { Text = 'Show keybind list', Default = false })
+Toggles.KeybindListToggle:OnChanged(function()
+    Library.KeybindFrame.Visible = Toggles.KeybindListToggle.Value
+end)
+
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'RightShift', NoUI = true, Text = 'Menu keybind' })
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+log('Menu ready')
+
+----------------------------------------------------------------
+-- ADD-ONS
+----------------------------------------------------------------
+task.spawn(function()
+    task.wait(1)
+    if Library.Unloaded then return end
+    local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+    log('ThemeManager loaded')
+    task.wait()
+    if Library.Unloaded then return end
+    local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+    log('SaveManager loaded')
+    task.wait()
+    if Library.Unloaded then return end
+
+    ThemeManager:SetLibrary(Library)
+    SaveManager:SetLibrary(Library)
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+    ThemeManager:SetFolder('MyScriptHub')
+    SaveManager:SetFolder('MyScriptHub/specific-game')
+    task.wait()
+
+    SaveManager:BuildConfigSection(Tabs.Settings)
+    task.wait()
+    if Library.Unloaded then return end
+    ThemeManager:ApplyToTab(Tabs.Settings)
+    task.wait()
+    if Library.Unloaded then return end
+    SaveManager:LoadAutoloadConfig()
+    log('Add-ons ready')
+end)

@@ -1,26 +1,12 @@
 -- LinoriaLib menu: Main | Visuals | Settings
--- OPRAVENO: Všechny přístupy k .RenderStepped obaleny v pcall.
--- OPRAVENO: task.spawn smyčky mají vlastní pcall, aby nemohly shodit hru.
--- OPRAVENO: Odstraněna env.__RivalsCleanup logika, která mohla způsobit,
--- že se volala stará poškozená cleanup funkce z předchozího běhu.
--- POKYNY: PŘED vložením skriptu proveď rejoin hry, aby se vyčistily staré
--- RenderStepped smyčky z předchozích spuštění.
+-- Startup-optimized: add-ons load in the background, UI built in stages
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
--- Přímé získání služeb bez wrapperu
-local RunService = game:GetService('RunService')
-local Players = game:GetService('Players')
-local Stats = game:GetService('Stats')
-local UIS = game:GetService('UserInputService')
-local LocalPlayer = Players.LocalPlayer
-
 local env = getgenv and getgenv() or _G
-
--- Úklid staré menu instance
 if env.__MenuLibrary then
     pcall(function() env.__MenuLibrary:Unload() end)
     env.__MenuLibrary = nil
@@ -30,6 +16,12 @@ end
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
 env.__MenuLibrary = Library
 log('Library loaded')
+
+local RunService = game:GetService('RunService')
+local Players = game:GetService('Players')
+local Stats = game:GetService('Stats')
+local UIS = game:GetService('UserInputService')
+local LocalPlayer = Players.LocalPlayer
 
 local Window = Library:CreateWindow({
     Title = 'Example menu',
@@ -50,10 +42,16 @@ Tabs.Settings = Window:AddTab('Settings')
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Silent Aim')
 
 local SilentAim = {
-    Enabled = false, AlwaysOn = false, KeyHeld = false, Key = 'E',
-    FOV = 150, Part = 'Head', TeamCheck = true, WallCheck = false,
-    ShowFOV = true, Target = nil, Debug = false,
+    Enabled = false,
+    AlwaysOn = false,
+    KeyHeld = false,
+    FOV = 150,
+    Part = 'Head',
+    TeamCheck = true,
+    Target = nil,
 }
+
+local aimKey = Enum.KeyCode.E
 
 LeftGroupBox:AddToggle('SAEnabled', { Text = 'Enable Silent Aim', Default = false, Tooltip = 'Hlavni vypinac' })
     :OnChanged(function(v) SilentAim.Enabled = v end)
@@ -66,10 +64,7 @@ LeftGroupBox:AddLabel('Aim key'):AddKeyPicker('SAKey', {
 })
 
 LeftGroupBox:AddSlider('SAFOV', { Text = 'FOV (px)', Default = 150, Min = 10, Max = 800, Rounding = 1, Compact = false })
-    :OnChanged(function(v)
-        SilentAim.FOV = v
-        if fovCircle then fovCircle.Radius = v end
-    end)
+    :OnChanged(function(v) SilentAim.FOV = v end)
 
 LeftGroupBox:AddDropdown('SAPart', {
     Values = { 'Head', 'UpperTorso', 'LowerTorso', 'HumanoidRootPart', 'Torso' },
@@ -79,50 +74,31 @@ LeftGroupBox:AddDropdown('SAPart', {
 LeftGroupBox:AddToggle('SATeam', { Text = 'Team check', Default = true })
     :OnChanged(function(v) SilentAim.TeamCheck = v end)
 
-LeftGroupBox:AddToggle('SAWall', { Text = 'Wall check', Default = false })
-    :OnChanged(function(v) SilentAim.WallCheck = v end)
-
-LeftGroupBox:AddToggle('SADebug', { Text = 'Debug vypis (F9)', Default = false })
-    :OnChanged(function(v) SilentAim.Debug = v end)
-
-local fovToggle = LeftGroupBox:AddToggle('SAFovDraw', { Text = 'Draw FOV circle', Default = true })
-fovToggle:OnChanged(function(v)
-    SilentAim.ShowFOV = v
-    if fovCircle then fovCircle.Visible = (v and SilentAim.Enabled) end
-end)
-fovToggle:AddColorPicker('SAFovColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'FOV color' })
-    :OnChanged(function(c) if fovCircle then fovCircle.Color = c end end)
-
 log('Main tab built')
 task.wait()
 
 ----------------------------------------------------------------
 -- SILENT AIM LOGIKA
 ----------------------------------------------------------------
-local function keyCodeFromName(name)
-    local ok, code = pcall(function() return Enum.KeyCode[name] end)
-    if ok then return code end
-    return nil
-end
-
-local function currentKey()
-    local opt = Options and Options.SAKey
-    if opt and type(opt.Value) == 'string' then return opt.Value end
-    return SilentAim.Key
-end
-
 UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    if Library and Library.Open then return end
-    local code = keyCodeFromName(currentKey())
-    if code and input.KeyCode == code then SilentAim.KeyHeld = true end
+    if input.KeyCode == aimKey then SilentAim.KeyHeld = true end
 end)
 
-UIS.InputEnded:Connect(function(input, gp)
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    local code = keyCodeFromName(currentKey())
-    if code and input.KeyCode == code then SilentAim.KeyHeld = false end
+UIS.InputEnded:Connect(function(input)
+    if input.KeyCode == aimKey then SilentAim.KeyHeld = false end
+end)
+
+-- Aktualizace klávesy z KeyPickeru
+task.spawn(function()
+    while not Library.Unloaded do
+        task.wait(0.5)
+        local opt = Options and Options.SAKey
+        if opt and type(opt.Value) == 'string' then
+            local ok, code = pcall(function() return Enum.KeyCode[opt.Value] end)
+            if ok and code then aimKey = code end
+        end
+    end
 end)
 
 local function isActive()
@@ -131,13 +107,12 @@ local function isActive()
     return SilentAim.KeyHeld
 end
 
-local function getTargetPart()
+local function getTarget()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
     local vp = cam.ViewportSize
     local origin = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
-    local camPos = cam.CFrame.Position
-    local bestPart, bestDist = nil, SilentAim.FOV
+    local best, bestDist = nil, SilentAim.FOV
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
@@ -150,22 +125,12 @@ local function getTargetPart()
                        and plr.Team == LocalPlayer.Team then skip = true end
                     if not skip then
                         local part = char:FindFirstChild(SilentAim.Part)
-                        if not part then
-                            part = char:FindFirstChild('Head') or char:FindFirstChild('UpperTorso') or char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso')
-                        end
                         if part then
                             local sp, onScreen = cam:WorldToViewportPoint(part.Position)
                             if onScreen then
                                 local d = (Vector2.new(sp.X, sp.Y) - origin).Magnitude
                                 if d <= bestDist then
-                                    if SilentAim.WallCheck then
-                                        local params = RaycastParams.new()
-                                        params.FilterType = Enum.RaycastFilterType.Exclude
-                                        params.FilterDescendantsInstances = { LocalPlayer.Character, cam }
-                                        local res = workspace:Raycast(camPos, part.Position - camPos, params)
-                                        if res and not res.Instance:IsDescendantOf(char) then skip = true end
-                                    end
-                                    if not skip then bestPart, bestDist = part, d end
+                                    best, bestDist = part, d
                                 end
                             end
                         end
@@ -174,131 +139,64 @@ local function getTargetPart()
             end
         end
     end
-    return bestPart
+    return best
 end
 
-local fovCircle
-if Drawing then
-    pcall(function()
-        fovCircle = Drawing.new('Circle')
-        fovCircle.Thickness = 1
-        fovCircle.Color = Color3.fromRGB(255, 255, 255)
-        fovCircle.Filled = false
-        fovCircle.Transparency = 0.7
-        fovCircle.NumSides = 64
-        fovCircle.Radius = SilentAim.FOV
-        fovCircle.Visible = false
-    end)
-end
-
-print('[SA] === Silent Aim nacten ===')
-print('[SA] Drawing:', tostring(Drawing ~= nil))
-print('[SA] hookmetamethod:', tostring(hookmetamethod ~= nil))
-print('[SA] getnamecallmethod:', tostring(getnamecallmethod ~= nil))
-print('[SA] LocalPlayer:', LocalPlayer and LocalPlayer.Name or 'NIL')
-
--- OPRAVA: Přímý přístup k RenderStepped přes game:GetService, ne přes proměnnou
-pcall(function()
-    game:GetService('RunService').RenderStepped:Connect(function()
-        pcall(function()
-            if fovCircle then
-                local cam = workspace.CurrentCamera
-                if SilentAim.Enabled and SilentAim.ShowFOV and cam then
-                    local vp = cam.ViewportSize
-                    fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
-                    fovCircle.Radius = SilentAim.FOV
-                    if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
-                    fovCircle.Visible = true
-                else
-                    fovCircle.Visible = false
-                end
-            end
-
-            if isActive() then
-                SilentAim.Target = getTargetPart()
-            else
-                SilentAim.Target = nil
-            end
-        end)
-    end)
-end)
-
--- Nezávislá debug smyčka
-task.spawn(function()
-    while not Library.Unloaded do
-        task.wait(1)
-        pcall(function()
-            if SilentAim.Debug then
-                local status = SilentAim.Enabled and 'ON' or 'OFF'
-                local tgt = SilentAim.Target and SilentAim.Target:GetFullName() or 'zadny'
-                local active = isActive() and 'ANO' or 'NE'
-                print(('[SA] Enabled=%s | KeyHeld=%s | Aktivni=%s | Target=%s'):format(
-                    status, tostring(SilentAim.KeyHeld), active, tgt))
-            end
-        end)
+RunService.RenderStepped:Connect(function()
+    if isActive() then
+        SilentAim.Target = getTarget()
+    else
+        SilentAim.Target = nil
     end
 end)
 
--- ============================================================
--- BEZPEČNÝ HOOK
--- ============================================================
+-- Hook pro přesměrování paprsků
 local oldNamecall
 oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
     if SilentAim.Target == nil then
         return oldNamecall(self, ...)
     end
 
-    local ok, result = pcall(function()
-        local method = getnamecallmethod()
-        local target = SilentAim.Target
+    local method = getnamecallmethod()
+    local target = SilentAim.Target
 
-        if not target or not target.Parent then return nil end
+    if not target or not target.Parent then
+        return oldNamecall(self, ...)
+    end
 
-        local targetPos = target.Position
+    local cam = workspace.CurrentCamera
+    if not cam then return oldNamecall(self, ...) end
 
-        if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
-            local cam = workspace.CurrentCamera
-            if cam then
-                local camPos = cam.CFrame.Position
-                local dir = targetPos - camPos
-                if dir.Magnitude > 0 then
-                    local args = table.pack(...)
-                    local depth = tonumber(args[3]) or 5000
-                    return Ray.new(camPos, dir.Unit * depth)
-                end
-            end
+    local camPos = cam.CFrame.Position
+    local targetPos = target.Position
+
+    if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
+        local args = table.pack(...)
+        local depth = tonumber(args[3]) or 5000
+        local dir = (targetPos - camPos).Unit * depth
+        return Ray.new(camPos, dir)
+    end
+
+    if method == 'FindPartOnRay' or method == 'FindPartOnRayWithIgnoreList'
+       or method == 'FindPartOnRayWithWhitelist' then
+        local args = table.pack(...)
+        if typeof(args[1]) == 'Ray' then
+            local newRay = Ray.new(camPos, targetPos - camPos)
+            return oldNamecall(self, newRay, table.unpack(args, 2, args.n))
         end
+    end
 
-        if method == 'FindPartOnRay' or method == 'FindPartOnRayWithIgnoreList'
-           or method == 'FindPartOnRayWithWhitelist' then
-            local cam = workspace.CurrentCamera
-            if cam then
-                local args = table.pack(...)
-                if typeof(args[1]) == 'Ray' then
-                    local newRay = Ray.new(cam.CFrame.Position, targetPos - cam.CFrame.Position)
-                    return oldNamecall(self, newRay, table.unpack(args, 2, args.n))
-                end
-            end
+    if method == 'Raycast' or method == 'RaycastAll' then
+        local args = table.pack(...)
+        if typeof(args[1]) == 'Vector3' and typeof(args[2]) == 'Vector3' then
+            local newDir = (targetPos - args[1]).Unit * args[2].Magnitude
+            return oldNamecall(self, args[1], newDir, table.unpack(args, 3, args.n))
+        elseif typeof(args[1]) == 'Ray' then
+            local newRay = Ray.new(args[1].Origin, targetPos - args[1].Origin)
+            return oldNamecall(self, newRay, table.unpack(args, 2, args.n))
         end
+    end
 
-        if method == 'Raycast' or method == 'RaycastAll' then
-            local args = table.pack(...)
-            if typeof(args[1]) == 'Vector3' and typeof(args[2]) == 'Vector3' then
-                local newDir = targetPos - args[1]
-                if newDir.Magnitude > 0 and args[2].Magnitude > 0 then
-                    local finalDir = newDir.Unit * args[2].Magnitude
-                    return oldNamecall(self, args[1], finalDir, table.unpack(args, 3, args.n))
-                end
-            elseif typeof(args[1]) == 'Ray' then
-                local newRay = Ray.new(args[1].Origin, targetPos - args[1].Origin)
-                return oldNamecall(self, newRay, table.unpack(args, 2, args.n))
-            end
-        end
-
-        return nil
-    end)
-
-    if ok and result ~= nil then return result end
     return oldNamecall(self, ...)
 end))
 
@@ -309,7 +207,6 @@ log('Silent aim ready')
 ----------------------------------------------------------------
 local ESPCleanup = function() end
 local espOk, espErr = pcall(function()
-
     local ESPGroup = Tabs.Visuals:AddLeftGroupbox('ESP')
     local ESPSettings = Tabs.Visuals:AddRightGroupbox('ESP Settings')
 
@@ -589,20 +486,15 @@ local espOk, espErr = pcall(function()
                 return
             end
             local lastErr
-            local connOk, connErr = pcall(function()
-                espConn = game:GetService('RunService').RenderStepped:Connect(function()
-                    local ok, err = pcall(updateESP)
-                    if not ok and err ~= lastErr then
-                        lastErr = err
-                        warn('[menu] ESP error: ' .. tostring(err))
-                    end
-                end)
+            espConn = RunService.RenderStepped:Connect(function()
+                local ok, err = pcall(updateESP)
+                if not ok and err ~= lastErr then
+                    lastErr = err
+                    warn('[menu] ESP error: ' .. tostring(err))
+                end
             end)
-            if not connOk then
-                warn('[menu] Nelze pripojit ESP: ' .. tostring(connErr))
-            end
         elseif not active and espConn then
-            pcall(function() espConn:Disconnect() end)
+            espConn:Disconnect()
             espConn = nil
             removeAllESP()
         end
@@ -613,14 +505,14 @@ local espOk, espErr = pcall(function()
         Toggles[ESP_TOGGLES[i]]:OnChanged(refreshESP)
     end
 
-    Players.PlayerRemoving:Connect(removeESP)
+    local removingConn = Players.PlayerRemoving:Connect(removeESP)
 
     ESPCleanup = function()
-        if espConn then pcall(function() espConn:Disconnect() end) espConn = nil end
+        if espConn then espConn:Disconnect() espConn = nil end
+        removingConn:Disconnect()
         removeAllESP()
     end
 end)
-
 if not espOk then
     warn('[menu] ESP failed to load: ' .. tostring(espErr))
     Library:Notify('ESP failed to load: ' .. tostring(espErr), 15)
@@ -638,25 +530,21 @@ local lastText = ''
 task.spawn(function()
     while not Library.Unloaded do
         task.wait(2)
-        pcall(function()
-            if WatermarkEnabled then
-                local rs = game:GetService('RunService')
-                local fps = math.floor(1 / rs.RenderStepped:Wait())
-                local ping = 0
-                pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
-                local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))
-                if text ~= lastText then
-                    lastText = text
-                    Library:SetWatermark(text)
-                end
+        if WatermarkEnabled then
+            local fps = math.floor(1 / RunService.RenderStepped:Wait())
+            local ping = 0
+            pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
+            local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))
+            if text ~= lastText then
+                lastText = text
+                Library:SetWatermark(text)
             end
-        end)
+        end
     end
 end)
 
 Library:OnUnload(function()
     ESPCleanup()
-    if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
     Library.Unloaded = true
 end)
 

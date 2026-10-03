@@ -1,7 +1,4 @@
 -- LinoriaLib menu: Main | Visuals | Misc | Settings
--- OPRAVENO: Silent aim už nestřílí sám. Klávesa se čte pouze z KeyPickeru.
--- Odstraněny konfliktní InputBegan/InputEnded handlery.
-
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
@@ -30,6 +27,7 @@ Tabs.Settings = Window:AddTab('Settings')
 local SilentAim = {
     Enabled = false,
     AutoShoot = false,
+    KeyHeld = false,
     FOV = 100,
     HitPart = 'Head',
     HitChance = 100,
@@ -48,7 +46,7 @@ MainGroup:AddToggle('SAEnabled', {
 })
 
 MainGroup:AddToggle('SAAutoShoot', {
-    Text = 'Auto Shoot (střílí sám bez klávesy)',
+    Text = 'Auto Shoot (bez klávesy)',
     Default = false,
     Callback = function(v) SilentAim.AutoShoot = v end,
 })
@@ -180,20 +178,49 @@ if Toggles.AntiKatana then
 end
 
 ----------------------------------------------------------------
--- SILENT AIM LOGIKA
+-- SILENT AIM – DETEKCE KLÁVESY
 ----------------------------------------------------------------
+local function getKeyCode()
+    local picker = Options and Options.SAKey
+    if picker and type(picker.Value) == 'string' then
+        local ok, code = pcall(function() return Enum.KeyCode[picker.Value] end)
+        if ok and code then return code end
+    end
+    return Enum.KeyCode.E
+end
+
+-- Detekce klávesy – jednoduché InputBegan/Ended
+UIS.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if input.KeyCode == getKeyCode() then
+        SilentAim.KeyHeld = true
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if input.KeyCode == getKeyCode() then
+        SilentAim.KeyHeld = false
+    end
+end)
+
+-- Když uživatel změní klávesu v KeyPickeru, resetuj stav
+if Options and Options.SAKey then
+    Options.SAKey:OnChanged(function()
+        SilentAim.KeyHeld = false
+    end)
+end
+
 local function isSilentActive()
     if not SilentAim.Enabled then return false end
     if SilentAim.AutoShoot then return true end
-    -- Klávesa se čte POUZE z KeyPickeru
-    local picker = Options and Options.SAKey
-    if picker then
-        local ok, state = pcall(function() return picker:GetState() end)
-        if ok and state then return true end
-    end
-    return false
+    return SilentAim.KeyHeld
 end
 
+----------------------------------------------------------------
+-- SILENT AIM LOGIKA
+----------------------------------------------------------------
 local function getClosestInFOV()
     local cam = workspace.CurrentCamera
     if not cam then return nil end
@@ -671,7 +698,7 @@ end)
 print('[menu] Settings OK')
 
 ----------------------------------------------------------------
--- ADD-ONY (ThemeManager + SaveManager)
+-- ADD-ONY
 ----------------------------------------------------------------
 task.spawn(function()
     task.wait(1)

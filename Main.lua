@@ -1,6 +1,5 @@
 -- LinoriaLib menu: Main | Visuals (ESP) | Settings
--- OPRAVENO: Chybějící otevírací blok pcall u ESP + deklarace ESPCleanup.
--- Bez těchto řádků skript okamžitě padá na syntax error a vůbec se nespustí.
+-- OPRAVENO: Silent aim hook pro Rivals + GetCameraData hook + cleanup.
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
@@ -8,6 +7,26 @@ local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0))
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local env = getgenv and getgenv() or _G
+
+-- ============================================================
+-- GLOBÁLNÍ CLEANUP PŘEDCHOZÍ INSTANCE
+-- ============================================================
+if env.__RivalsCleanup then
+    pcall(env.__RivalsCleanup)
+    env.__RivalsCleanup = nil
+    task.wait(0.5)
+end
+
+local cleanups = {}
+local function addCleanup(fn) table.insert(cleanups, fn) end
+
+env.__RivalsCleanup = function()
+    for i = #cleanups, 1, -1 do
+        pcall(cleanups[i])
+    end
+    table.clear(cleanups)
+end
+
 if env.__MenuLibrary then
     pcall(function() env.__MenuLibrary:Unload() end)
     env.__MenuLibrary = nil
@@ -38,14 +57,14 @@ Tabs.Visuals = Window:AddTab('Visuals')
 Tabs.Settings = Window:AddTab('Settings')
 
 ----------------------------------------------------------------
--- MAIN TAB
+-- MAIN TAB – SILENT AIM
 ----------------------------------------------------------------
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Silent Aim')
 
 local SilentAim = {
     Enabled = false, AlwaysOn = false, KeyHeld = false, Key = 'E',
     FOV = 150, Part = 'Head', TeamCheck = true, WallCheck = false,
-    ShowFOV = true, Target = nil,
+    ShowFOV = true, Target = nil, Debug = false,
 }
 
 LeftGroupBox:AddToggle('SAEnabled', { Text = 'Enable Silent Aim', Default = false, Tooltip = 'Hlavni vypinac' })
@@ -75,6 +94,9 @@ LeftGroupBox:AddToggle('SATeam', { Text = 'Team check', Default = true })
 LeftGroupBox:AddToggle('SAWall', { Text = 'Wall check', Default = false })
     :OnChanged(function(v) SilentAim.WallCheck = v end)
 
+LeftGroupBox:AddToggle('SADebug', { Text = 'Debug vypis (F9)', Default = false })
+    :OnChanged(function(v) SilentAim.Debug = v end)
+
 local fovToggle = LeftGroupBox:AddToggle('SAFovDraw', { Text = 'Draw FOV circle', Default = true })
 fovToggle:OnChanged(function(v)
     SilentAim.ShowFOV = v
@@ -101,19 +123,21 @@ local function currentKey()
     return SilentAim.Key
 end
 
-UIS.InputBegan:Connect(function(input, gp)
+local inputBeginConn = UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if Library and Library.Open then return end
     local code = keyCodeFromName(currentKey())
     if code and input.KeyCode == code then SilentAim.KeyHeld = true end
 end)
+addCleanup(function() inputBeginConn:Disconnect() end)
 
-UIS.InputEnded:Connect(function(input, gp)
+local inputEndConn = UIS.InputEnded:Connect(function(input, gp)
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     local code = keyCodeFromName(currentKey())
     if code and input.KeyCode == code then SilentAim.KeyHeld = false end
 end)
+addCleanup(function() inputEndConn:Disconnect() end)
 
 local function isActive()
     if not SilentAim.Enabled then return false end
@@ -140,6 +164,9 @@ local function getTargetPart()
                        and plr.Team == LocalPlayer.Team then skip = true end
                     if not skip then
                         local part = char:FindFirstChild(SilentAim.Part)
+                        if not part and SilentAim.Part ~= 'Torso' then
+                            part = char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso') or char:FindFirstChild('Head')
+                        end
                         if part then
                             local sp, onScreen = cam:WorldToViewportPoint(part.Position)
                             if onScreen then
@@ -166,23 +193,23 @@ end
 
 local fovCircle
 if Drawing then
-    fovCircle = Drawing.new('Circle')
-    fovCircle.Thickness = 1
-    fovCircle.Color = Color3.fromRGB(255, 255, 255)
-    fovCircle.Filled = false
-    fovCircle.Transparency = 0.7
-    fovCircle.NumSides = 64
-    fovCircle.Radius = SilentAim.FOV
-    fovCircle.Visible = false
+    local ok = pcall(function()
+        fovCircle = Drawing.new('Circle')
+        fovCircle.Thickness = 1
+        fovCircle.Color = Color3.fromRGB(255, 255, 255)
+        fovCircle.Filled = false
+        fovCircle.Transparency = 0.7
+        fovCircle.NumSides = 64
+        fovCircle.Radius = SilentAim.FOV
+        fovCircle.Visible = false
+    end)
+    if ok and fovCircle then
+        addCleanup(function() pcall(function() fovCircle:Remove() end) fovCircle = nil end)
+    end
 end
 
-RunService.RenderStepped:Connect(function()
-    if isActive() then
-        SilentAim.Target = getTargetPart()
-    else
-        SilentAim.Target = nil
-    end
-
+local lastDbg = 0
+local silentAimConn = RunService.RenderStepped:Connect(function()
     if fovCircle then
         local cam = workspace.CurrentCamera
         if SilentAim.Enabled and SilentAim.ShowFOV and cam then
@@ -195,51 +222,121 @@ RunService.RenderStepped:Connect(function()
             fovCircle.Visible = false
         end
     end
-end)
 
+    if isActive() then
+        SilentAim.Target = getTargetPart()
+    else
+        SilentAim.Target = nil
+    end
+
+    -- Debug vypis kazdou sekundu
+    if SilentAim.Debug and tick() - lastDbg > 1 then
+        lastDbg = tick()
+        local status = SilentAim.Enabled and 'ON' or 'OFF'
+        local tgt = SilentAim.Target and SilentAim.Target:GetFullName() or 'zadny'
+        print(('[SA] Enabled=%s | KeyHeld=%s | Target=%s'):format(status, tostring(SilentAim.KeyHeld), tgt))
+    end
+end)
+addCleanup(function() silentAimConn:Disconnect() end)
+
+-- ============================================================
+-- OPRAVENÝ HOOK PRO RIVALS – zachytává interní Utility.Raycast
+-- i Camera:GetCameraData, které hra používá pro střelbu.
+-- ============================================================
 local oldNamecall
 oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
+    if SilentAim.Target == nil then
+        return oldNamecall(self, ...)
+    end
+
     local method = getnamecallmethod()
+    local target = SilentAim.Target
+    local cam = workspace.CurrentCamera
 
-    if SilentAim.Target ~= nil then
-        local target = SilentAim.Target
-
-        if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
-            local cam = workspace.CurrentCamera
-            if cam then
-                local camPos = cam.CFrame.Position
-                local dir = target.Position - camPos
-                if dir.Magnitude > 0 then
-                    local args = { ... }
-                    local depth = tonumber(args[3]) or 5000
-                    return Ray.new(camPos, dir.Unit * depth)
-                end
+    -- 1) Původní cesty (ScreenPointToRay / ViewportPointToRay)
+    if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
+        if cam then
+            local camPos = cam.CFrame.Position
+            local dir = target.Position - camPos
+            if dir.Magnitude > 0 then
+                local args = { ... }
+                local depth = tonumber(args[3]) or 5000
+                return Ray.new(camPos, dir.Unit * depth)
             end
         end
+    end
 
-        if method == 'Raycast' or method == 'FindPartOnRay'
-           or method == 'FindPartOnRayWithIgnoreList' or method == 'FindPartOnRayWithWhitelist' then
-            local cam = workspace.CurrentCamera
-            if cam then
-                local camPos = cam.CFrame.Position
-                local args = { ... }
-                if typeof(args[1]) == 'Ray' then
-                    args[1] = Ray.new(camPos, target.Position - camPos)
-                    return oldNamecall(self, table.unpack(args))
-                end
+    -- 2) Přímé raycasty
+    if method == 'FindPartOnRay' or method == 'FindPartOnRayWithIgnoreList'
+       or method == 'FindPartOnRayWithWhitelist' then
+        if cam then
+            local camPos = cam.CFrame.Position
+            local args = { ... }
+            if typeof(args[1]) == 'Ray' then
+                args[1] = Ray.new(camPos, target.Position - camPos)
+                return oldNamecall(self, table.unpack(args))
             end
+        end
+    end
+
+    -- 3) Interní Utility.Raycast (Vector3 origin, Vector3 direction)
+    if method == 'Raycast' or method == 'RaycastAll' then
+        local args = { ... }
+        if typeof(args[1]) == 'Vector3' and typeof(args[2]) == 'Vector3' then
+            local newDir = (target.Position - args[1])
+            if newDir.Magnitude > 0 then
+                newDir = newDir.Unit * args[2].Magnitude
+                args[2] = newDir
+                return oldNamecall(self, table.unpack(args))
+            end
+        elseif typeof(args[1]) == 'Ray' then
+            args[1] = Ray.new(args[1].Origin, (target.Position - args[1].Origin))
+            return oldNamecall(self, table.unpack(args))
         end
     end
 
     return oldNamecall(self, ...)
 end))
 
+addCleanup(function()
+    pcall(function()
+        hookmetamethod(game, '__namecall', oldNamecall)
+    end)
+end)
+
+-- ============================================================
+-- DODATEČNÝ HOOK: Camera:GetCameraData
+-- Axon Hub pro Rivals hookuje tuto metodu pro silent aim.
+-- ============================================================
+local oldGetCameraData
+if hookfunction and workspace.CurrentCamera and workspace.CurrentCamera.GetCameraData then
+    local camDataRef = workspace.CurrentCamera
+    oldGetCameraData = hookfunction(camDataRef.GetCameraData, function(self, ...)
+        local data = oldGetCameraData(self, ...)
+        if SilentAim.Target ~= nil and data and typeof(data) == 'table' then
+            local camPos = self.CFrame.Position
+            local dir = (SilentAim.Target.Position - camPos)
+            if dir.Magnitude > 0 then
+                pcall(function() data.Direction = dir.Unit end)
+                pcall(function() data.LookVector = dir.Unit end)
+            end
+        end
+        return data
+    end)
+    addCleanup(function()
+        pcall(function()
+            if oldGetCameraData and camDataRef and camDataRef.GetCameraData then
+                hookfunction(camDataRef.GetCameraData, oldGetCameraData)
+            end
+        end)
+    end)
+end
+
 log('Silent aim ready')
 
 ----------------------------------------------------------------
--- VISUALS TAB (ESP UI)
+-- VISUALS TAB (ESP)
 ----------------------------------------------------------------
--- OPRAVA: Deklarace ESPCleanup a otevírací pcall blok, které v předchozí verzi chyběly
 local ESPCleanup = function() end
 local espOk, espErr = pcall(function()
 
@@ -527,8 +624,10 @@ local espOk, espErr = pcall(function()
                 if not ok and err ~= lastErr then
                     lastErr = err
                     warn('[menu] ESP error: ' .. tostring(err))
-                    Library:Notify('ESP error: ' .. tostring(err), 10)
                 end
+            end)
+            addCleanup(function()
+                if espConn then espConn:Disconnect() espConn = nil end
             end)
         elseif not active and espConn then
             espConn:Disconnect()
@@ -543,6 +642,7 @@ local espOk, espErr = pcall(function()
     end
 
     local removingConn = Players.PlayerRemoving:Connect(removeESP)
+    addCleanup(function() removingConn:Disconnect() end)
 
     ESPCleanup = function()
         if espConn then espConn:Disconnect() espConn = nil end
@@ -583,8 +683,7 @@ end)
 
 Library:OnUnload(function()
     ESPCleanup()
-    if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
-    Library.Unloaded = true
+    pcall(env.__RivalsCleanup)
 end)
 
 ----------------------------------------------------------------

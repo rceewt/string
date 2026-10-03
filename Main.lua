@@ -1,7 +1,4 @@
--- LinoriaLib menu: Main (Silent Aim + Anti Katana) | Visuals | Misc (Unlock All + Hit Sounds) | Settings
-local t0 = tick()
-local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
-
+-- LinoriaLib menu: Main | Visuals | Misc | Settings
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local env = getgenv and getgenv() or _G
@@ -13,7 +10,6 @@ end
 
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
 env.__MenuLibrary = Library
-log('Library loaded')
 
 local RunService = game:GetService('RunService')
 local Players = game:GetService('Players')
@@ -23,11 +19,7 @@ local ReplicatedStorage = game:GetService('ReplicatedStorage')
 local LocalPlayer = Players.LocalPlayer
 
 local Window = Library:CreateWindow({
-    Title = 'Rivals Menu',
-    Center = true,
-    AutoShow = true,
-    TabPadding = 8,
-    MenuFadeTime = 0,
+    Title = 'Rivals Menu', Center = true, AutoShow = true, TabPadding = 8, MenuFadeTime = 0,
 })
 
 local Tabs = {}
@@ -36,128 +28,128 @@ Tabs.Visuals  = Window:AddTab('Visuals')
 Tabs.Misc     = Window:AddTab('Misc')
 Tabs.Settings = Window:AddTab('Settings')
 
+local function safe(name, fn)
+    local ok, err = pcall(fn)
+    if not ok then
+        warn('[menu] Chyba "' .. name .. '": ' .. tostring(err))
+        pcall(function() Library:Notify('Chyba "' .. name .. '"', 5) end)
+    end
+end
+
 ----------------------------------------------------------------
--- POMOCNÉ MODULY PRO SILENT AIM
+-- MODULY PRO SILENT AIM
 ----------------------------------------------------------------
 local Utility, EnumLibrary
 pcall(function() Utility = require(ReplicatedStorage.Modules.Utility) end)
 pcall(function() EnumLibrary = require(ReplicatedStorage.Modules.EnumLibrary) end)
 
-local FighterController
-pcall(function()
-    FighterController = require(LocalPlayer.PlayerScripts.Controllers.FighterController)
-end)
-
 local function getLocalFighter()
-    if FighterController and FighterController.LocalFighter then
-        return FighterController.LocalFighter
-    end
     local ok, fc = pcall(function()
         return require(LocalPlayer.PlayerScripts.Controllers.FighterController)
     end)
-    if ok and fc and fc.LocalFighter then
-        FighterController = fc
-        return fc.LocalFighter
-    end
+    if ok and fc and fc.LocalFighter then return fc.LocalFighter end
     return nil
 end
 
 ----------------------------------------------------------------
 -- MAIN TAB – SILENT AIM + ANTI KATANA
 ----------------------------------------------------------------
-local LeftGroupBox = Tabs.Main:AddLeftGroupbox('Silent Aim')
-
 local silentAim = {
-    Enabled = false,
-    AlwaysOn = false,
-    KeyHeld = false,
-    Key = 'E',
-    FOV = 100,
-    HitPart = 'Head',
-    HitChance = 100,
-    TeamCheck = true,
-    WallCheck = false,
-    AutoShoot = false,
-    ShowFOV = true,
+    Enabled = false, AlwaysOn = false, KeyHeld = false,
+    FOV = 100, HitPart = 'Head', HitChance = 100,
+    TeamCheck = true, WallCheck = false, AutoShoot = false, ShowFOV = true,
 }
-
 local aimKey = Enum.KeyCode.E
 local antikatana = false
 
--- FOV kruh
-local fovScreenGui = Instance.new('ScreenGui')
-fovScreenGui.Name = 'SilentAimFOV'
-fovScreenGui.DisplayOrder = 10
-fovScreenGui.ResetOnSpawn = false
-fovScreenGui.IgnoreGuiInset = true
-fovScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-fovScreenGui.Parent = game.CoreGui
-
-local fovContainer = Instance.new('Frame')
-fovContainer.BackgroundTransparency = 1
-fovContainer.BorderSizePixel = 0
-fovContainer.Visible = false
-fovContainer.Parent = fovScreenGui
-
-local fovOutline = Instance.new('Frame')
-fovOutline.BackgroundTransparency = 1
-fovOutline.Size = UDim2.new(1, 0, 1, 0)
-fovOutline.Parent = fovContainer
-local fovCorner = Instance.new('UICorner')
-fovCorner.CornerRadius = UDim.new(1, 0)
-fovCorner.Parent = fovOutline
-local fovStroke = Instance.new('UIStroke')
-fovStroke.Color = Color3.fromRGB(255, 255, 255)
-fovStroke.Thickness = 1.5
-fovStroke.Transparency = 0
-fovStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-fovStroke.Parent = fovOutline
-
--- UI ovládání
-LeftGroupBox:AddToggle('SAEnabled', { Text = 'Enable Silent Aim', Default = false })
-    :OnChanged(function(v) silentAim.Enabled = v end)
-
-LeftGroupBox:AddToggle('SAAlways', { Text = 'Always On (ignore key)', Default = false })
-    :OnChanged(function(v) silentAim.AlwaysOn = v end)
-
-LeftGroupBox:AddToggle('SAAutoShoot', { Text = 'Auto Shoot', Default = false })
-    :OnChanged(function(v) silentAim.AutoShoot = v end)
-
-LeftGroupBox:AddLabel('Aim key'):AddKeyPicker('SAKey', {
-    Default = 'E', NoUI = false, Text = 'Aim key', Mode = 'Hold',
-})
-
-LeftGroupBox:AddSlider('SAFOV', { Text = 'FOV (px)', Default = 100, Min = 10, Max = 800, Rounding = 0, Compact = false })
-    :OnChanged(function(v) silentAim.FOV = v end)
-
-LeftGroupBox:AddDropdown('SAHitPart', {
-    Values = { 'Head', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso', 'Torso' },
-    Default = 1, Multi = false, Text = 'Hit part',
-}):OnChanged(function(v) silentAim.HitPart = v end)
-
-LeftGroupBox:AddSlider('SAHitChance', { Text = 'Hit chance (%)', Default = 100, Min = 0, Max = 100, Rounding = 0, Compact = false })
-    :OnChanged(function(v) silentAim.HitChance = v end)
-
-LeftGroupBox:AddToggle('SATeam', { Text = 'Team check', Default = true })
-    :OnChanged(function(v) silentAim.TeamCheck = v end)
-
-LeftGroupBox:AddToggle('SAWall', { Text = 'Wall check', Default = false })
-    :OnChanged(function(v) silentAim.WallCheck = v end)
-
-local fovToggle = LeftGroupBox:AddToggle('SAFovDraw', { Text = 'Draw FOV circle', Default = true })
-fovToggle:OnChanged(function(v)
-    silentAim.ShowFOV = v
-    if not v then fovContainer.Visible = false end
+-- FOV kruh (bezpečné vytvoření)
+local fovContainer, fovStroke
+safe('FOV GUI', function()
+    local parent = (gethui and gethui()) or game:GetService('CoreGui')
+    local gui = Instance.new('ScreenGui')
+    gui.Name = 'SilentAimFOV'
+    gui.DisplayOrder = 10
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = parent
+    fovContainer = Instance.new('Frame')
+    fovContainer.BackgroundTransparency = 1
+    fovContainer.BorderSizePixel = 0
+    fovContainer.Visible = false
+    fovContainer.Parent = gui
+    local outline = Instance.new('Frame')
+    outline.BackgroundTransparency = 1
+    outline.Size = UDim2.new(1, 0, 1, 0)
+    outline.Parent = fovContainer
+    local corner = Instance.new('UICorner')
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = outline
+    fovStroke = Instance.new('UIStroke')
+    fovStroke.Color = Color3.fromRGB(255, 255, 255)
+    fovStroke.Thickness = 1.5
+    fovStroke.Transparency = 0
+    fovStroke.Parent = outline
 end)
-fovToggle:AddColorPicker('SAFovColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'FOV color' })
-    :OnChanged(function(c) fovStroke.Color = c end)
 
-LeftGroupBox:AddDivider()
+local SA = Tabs.Main:AddLeftGroupbox('Silent Aim')
 
-LeftGroupBox:AddToggle('AntiKatana', { Text = 'Anti Katana', Default = false })
-    :OnChanged(function(v) antikatana = v end)
+safe('SA toggles', function()
+    SA:AddToggle('SAEnabled', { Text = 'Enable Silent Aim', Default = false })
+        :OnChanged(function(v) silentAim.Enabled = v end)
+    SA:AddToggle('SAAlways', { Text = 'Always On (ignore key)', Default = false })
+        :OnChanged(function(v) silentAim.AlwaysOn = v end)
+    SA:AddToggle('SAAutoShoot', { Text = 'Auto Shoot', Default = false })
+        :OnChanged(function(v) silentAim.AutoShoot = v end)
+end)
 
-log('Main tab built')
+safe('SA key', function()
+    SA:AddLabel('Aim key'):AddKeyPicker('SAKey', {
+        Default = 'E', NoUI = false, Text = 'Aim key', Mode = 'Hold',
+    })
+end)
+
+safe('SA FOV slider', function()
+    SA:AddSlider('SAFOV', { Text = 'FOV (px)', Default = 100, Min = 10, Max = 800, Rounding = 0 })
+        :OnChanged(function(v) silentAim.FOV = v end)
+end)
+
+safe('SA hit part', function()
+    SA:AddDropdown('SAHitPart', {
+        Values = { 'Head', 'HumanoidRootPart', 'UpperTorso', 'LowerTorso', 'Torso' },
+        Default = 1, Multi = false, Text = 'Hit part',
+    }):OnChanged(function(v) silentAim.HitPart = v end)
+end)
+
+safe('SA hit chance', function()
+    SA:AddSlider('SAHitChance', { Text = 'Hit chance (%)', Default = 100, Min = 0, Max = 100, Rounding = 0 })
+        :OnChanged(function(v) silentAim.HitChance = v end)
+end)
+
+safe('SA team check', function()
+    SA:AddToggle('SATeam', { Text = 'Team check', Default = true })
+        :OnChanged(function(v) silentAim.TeamCheck = v end)
+end)
+
+safe('SA wall check', function()
+    SA:AddToggle('SAWall', { Text = 'Wall check', Default = false })
+        :OnChanged(function(v) silentAim.WallCheck = v end)
+end)
+
+safe('SA FOV circle', function()
+    SA:AddToggle('SAFovDraw', { Text = 'Draw FOV circle', Default = true })
+        :OnChanged(function(v)
+            silentAim.ShowFOV = v
+            if not v and fovContainer then fovContainer.Visible = false end
+        end)
+        :AddColorPicker('SAFovColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'FOV color' })
+        :OnChanged(function(c) if fovStroke then fovStroke.Color = c end end)
+end)
+
+safe('Anti Katana', function()
+    SA:AddDivider()
+    SA:AddToggle('AntiKatana', { Text = 'Anti Katana', Default = false })
+        :OnChanged(function(v) antikatana = v end)
+end)
 
 ----------------------------------------------------------------
 -- ANTI KATANA DETEKCE
@@ -170,14 +162,6 @@ task.spawn(function()
             local m = LocalPlayer.PlayerScripts.Modules.Items:FindFirstChild('Katana', true)
             if m then katana = require(m) end
         end)
-        if not katana then
-            for _, m in pairs(LocalPlayer.PlayerScripts:GetDescendants()) do
-                if m.Name == 'Katana' and m:IsA('ModuleScript') then
-                    local ok, res = pcall(require, m)
-                    if ok then katana = res break end
-                end
-            end
-        end
         if katana and type(katana) == 'table' and katana.StartAiming then break end
         attempts += 1
         task.wait(1)
@@ -197,10 +181,6 @@ task.spawn(function()
     end
 end)
 
-local function katanaDeflect(plr)
-    return katanausers[plr] == true
-end
-
 ----------------------------------------------------------------
 -- SILENT AIM LOGIKA
 ----------------------------------------------------------------
@@ -208,7 +188,6 @@ UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.KeyCode == aimKey then silentAim.KeyHeld = true end
 end)
-
 UIS.InputEnded:Connect(function(input)
     if input.KeyCode == aimKey then silentAim.KeyHeld = false end
 end)
@@ -236,7 +215,6 @@ local function getClosestInFOV()
     local origin = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
     local camPos = cam.CFrame.Position
     local best, bestDist = nil, silentAim.FOV
-
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
             local char = plr.Character
@@ -295,21 +273,19 @@ local function shouldHit()
 end
 
 local lastFireTime = 0
-local fireCooldown = 0.05
 
 local function fireSilent()
-    if not silentAim.Enabled then return end
-    if not Utility or not EnumLibrary then return end
+    if not silentAim.Enabled or not Utility or not EnumLibrary then return end
     local lf = getLocalFighter()
     if not lf or not lf.EquippedItem then return end
     local now = tick()
-    if now - lastFireTime < fireCooldown then return end
+    if now - lastFireTime < 0.05 then return end
     if not shouldHit() then return end
 
     local target = getClosestInFOV()
     if not target then return end
     local tp = Players:GetPlayerFromCharacter(target)
-    if antikatana and tp and katanaDeflect(tp) then return end
+    if antikatana and tp and katanausers[tp] then return end
 
     local part = hitPartFromName(target, silentAim.HitPart)
     if not part then return end
@@ -322,27 +298,21 @@ local function fireSilent()
     if not objId then return end
 
     lastFireTime = now
-    local shootPos = root.Position
-    local targetPos = part.Position
     local data = {
         [utf8.char(1)] = {
-            [utf8.char(0)] = Utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
-            [utf8.char(1)] = Utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
+            [utf8.char(0)] = Utility:EncodeCFrame(CFrame.new(root.Position, part.Position)),
+            [utf8.char(1)] = Utility:EncodeCFrame(CFrame.new(root.Position, part.Position)),
             [utf8.char(2)] = part,
             [utf8.char(3)] = Utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
         },
     }
     pcall(function()
         ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(
-            objId,
-            EnumLibrary:ToEnum('StartShooting'),
-            data,
-            nil
+            objId, EnumLibrary:ToEnum('StartShooting'), data, nil
         )
     end)
 end
 
--- FOV kruh update + auto shoot
 RunService.RenderStepped:Connect(function()
     if fovContainer then
         local cam = workspace.CurrentCamera
@@ -360,39 +330,37 @@ end)
 
 RunService.Heartbeat:Connect(function()
     if silentAim.Enabled and (silentAim.AutoShoot or isSilentActive()) then
-        fireSilent()
+        pcall(fireSilent)
     end
 end)
-
-log('Silent aim ready')
 
 ----------------------------------------------------------------
 -- VISUALS TAB – ESP
 ----------------------------------------------------------------
-local ESPGroup = Tabs.Visuals:AddLeftGroupbox('ESP')
-local ESPSettings = Tabs.Visuals:AddRightGroupbox('ESP Settings')
-
-ESPGroup:AddToggle('ESPEnabled', { Text = 'Enable ESP', Default = false })
-ESPGroup:AddDivider()
-ESPGroup:AddToggle('ESPBox', { Text = 'Box', Default = true })
-    :AddColorPicker('ESPBoxColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Box color' })
-ESPGroup:AddToggle('ESPSkeleton', { Text = 'Skeleton', Default = true })
-    :AddColorPicker('ESPSkeletonColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Skeleton color' })
-ESPGroup:AddToggle('ESPName', { Text = 'Name', Default = true })
-    :AddColorPicker('ESPNameColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Name color' })
-ESPGroup:AddToggle('ESPDist', { Text = 'Distance', Default = true })
-    :AddColorPicker('ESPDistColor', { Default = Color3.fromRGB(200, 200, 200), Title = 'Distance color' })
-ESPGroup:AddToggle('ESPHealth', { Text = 'Health bar', Default = true })
-ESPGroup:AddToggle('ESPHealthText', { Text = 'Health number', Default = true })
-    :AddColorPicker('ESPHealthTextColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Health color' })
-ESPGroup:AddToggle('ESPWeapon', { Text = 'Held weapon', Default = true })
-    :AddColorPicker('ESPWeaponColor', { Default = Color3.fromRGB(255, 220, 120), Title = 'Weapon color' })
-
-ESPSettings:AddToggle('ESPTeamCheck', { Text = 'Hide teammates', Default = false })
-
-log('Visuals tab built')
-
 local HAS_DRAWING = (Drawing ~= nil)
+
+safe('ESP UI', function()
+    local ESPGroup = Tabs.Visuals:AddLeftGroupbox('ESP')
+    local ESPSettings = Tabs.Visuals:AddRightGroupbox('ESP Settings')
+
+    ESPGroup:AddToggle('ESPEnabled', { Text = 'Enable ESP', Default = false })
+    ESPGroup:AddDivider()
+    ESPGroup:AddToggle('ESPBox', { Text = 'Box', Default = true })
+        :AddColorPicker('ESPBoxColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Box color' })
+    ESPGroup:AddToggle('ESPSkeleton', { Text = 'Skeleton', Default = true })
+        :AddColorPicker('ESPSkeletonColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Skeleton color' })
+    ESPGroup:AddToggle('ESPName', { Text = 'Name', Default = true })
+        :AddColorPicker('ESPNameColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Name color' })
+    ESPGroup:AddToggle('ESPDist', { Text = 'Distance', Default = true })
+        :AddColorPicker('ESPDistColor', { Default = Color3.fromRGB(200, 200, 200), Title = 'Distance color' })
+    ESPGroup:AddToggle('ESPHealth', { Text = 'Health bar', Default = true })
+    ESPGroup:AddToggle('ESPHealthText', { Text = 'Health number', Default = true })
+        :AddColorPicker('ESPHealthTextColor', { Default = Color3.fromRGB(255, 255, 255), Title = 'Health color' })
+    ESPGroup:AddToggle('ESPWeapon', { Text = 'Held weapon', Default = true })
+        :AddColorPicker('ESPWeaponColor', { Default = Color3.fromRGB(255, 220, 120), Title = 'Weapon color' })
+    ESPSettings:AddToggle('ESPTeamCheck', { Text = 'Hide teammates', Default = false })
+end)
+
 local ESP_TOGGLES = { 'ESPBox', 'ESPSkeleton', 'ESPName', 'ESPDist', 'ESPHealth', 'ESPHealthText', 'ESPWeapon' }
 local R15_BONES = {
     { 'Head', 'UpperTorso' }, { 'UpperTorso', 'LowerTorso' },
@@ -467,14 +435,20 @@ local function updateESP()
     local cam = workspace.CurrentCamera
     if not cam then return end
     local camPos = cam.CFrame.Position
-    local showBox, showSkel = Toggles.ESPBox.Value, Toggles.ESPSkeleton.Value
-    local showName, showDist = Toggles.ESPName.Value, Toggles.ESPDist.Value
-    local showHP, showHPText = Toggles.ESPHealth.Value, Toggles.ESPHealthText.Value
-    local showWeapon = Toggles.ESPWeapon.Value
-    local teamCheck = Toggles.ESPTeamCheck.Value
-    local boxColor, skelColor = Options.ESPBoxColor.Value, Options.ESPSkeletonColor.Value
-    local nameColor, distColor = Options.ESPNameColor.Value, Options.ESPDistColor.Value
-    local hpTextColor, weaponColor = Options.ESPHealthTextColor.Value, Options.ESPWeaponColor.Value
+    local showBox = Toggles.ESPBox and Toggles.ESPBox.Value
+    local showSkel = Toggles.ESPSkeleton and Toggles.ESPSkeleton.Value
+    local showName = Toggles.ESPName and Toggles.ESPName.Value
+    local showDist = Toggles.ESPDist and Toggles.ESPDist.Value
+    local showHP = Toggles.ESPHealth and Toggles.ESPHealth.Value
+    local showHPText = Toggles.ESPHealthText and Toggles.ESPHealthText.Value
+    local showWeapon = Toggles.ESPWeapon and Toggles.ESPWeapon.Value
+    local teamCheck = Toggles.ESPTeamCheck and Toggles.ESPTeamCheck.Value
+    local boxColor = (Options.ESPBoxColor and Options.ESPBoxColor.Value) or Color3.fromRGB(255, 255, 255)
+    local skelColor = (Options.ESPSkeletonColor and Options.ESPSkeletonColor.Value) or Color3.fromRGB(255, 255, 255)
+    local nameColor = (Options.ESPNameColor and Options.ESPNameColor.Value) or Color3.fromRGB(255, 255, 255)
+    local distColor = (Options.ESPDistColor and Options.ESPDistColor.Value) or Color3.fromRGB(200, 200, 200)
+    local hpTextColor = (Options.ESPHealthTextColor and Options.ESPHealthTextColor.Value) or Color3.fromRGB(255, 255, 255)
+    local weaponColor = (Options.ESPWeaponColor and Options.ESPWeaponColor.Value) or Color3.fromRGB(255, 220, 120)
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -560,9 +534,11 @@ end
 local function refreshESP()
     local anyFeature = false
     for i = 1, #ESP_TOGGLES do
-        if Toggles[ESP_TOGGLES[i]].Value then anyFeature = true break end
+        local t = Toggles[ESP_TOGGLES[i]]
+        if t and t.Value then anyFeature = true break end
     end
-    local active = Toggles.ESPEnabled.Value and anyFeature
+    local enabled = Toggles.ESPEnabled and Toggles.ESPEnabled.Value
+    local active = enabled and anyFeature
     if active and not espConn then
         if not HAS_DRAWING then
             Library:Notify('Drawing library neni dostupna.', 5)
@@ -570,201 +546,160 @@ local function refreshESP()
             return
         end
         espConn = RunService.RenderStepped:Connect(function()
-            local ok = pcall(updateESP)
-            if not ok then end
+            pcall(updateESP)
         end)
     elseif not active and espConn then
         espConn:Disconnect(); espConn = nil; removeAllESP()
     end
 end
 
-Toggles.ESPEnabled:OnChanged(refreshESP)
-for i = 1, #ESP_TOGGLES do Toggles[ESP_TOGGLES[i]]:OnChanged(refreshESP) end
+if Toggles.ESPEnabled then Toggles.ESPEnabled:OnChanged(refreshESP) end
+for i = 1, #ESP_TOGGLES do
+    if Toggles[ESP_TOGGLES[i]] then Toggles[ESP_TOGGLES[i]]:OnChanged(refreshESP) end
+end
 Players.PlayerRemoving:Connect(removeESP)
 
 ----------------------------------------------------------------
 -- MISC TAB – UNLOCK ALL + HIT SOUNDS
 ----------------------------------------------------------------
-local MiscUnlockGroup = Tabs.Misc:AddLeftGroupbox('Unlock')
+safe('Unlock All', function()
+    local G = Tabs.Misc:AddLeftGroupbox('Unlock')
+    local ran = false
+    G:AddToggle('ENABLE_UNLOCK_ALL', {
+        Text = 'Unlock All', Default = false,
+        Callback = function(v)
+            if v and not ran then
+                ran = true
+                pcall(function()
+                    loadstring(game:HttpGet('https://pastefy.app/6ElsMLeb/raw', true))()
+                end)
+                Library:Notify('Unlock All spusten.', 5)
+            end
+        end,
+    })
+end)
 
-local unlockAllExecuted = false
-MiscUnlockGroup:AddToggle('ENABLE_UNLOCK_ALL', {
-    Text = 'Unlock All',
-    Default = false,
-    Callback = function(Value)
-        if Value and not unlockAllExecuted then
-            unlockAllExecuted = true
-            pcall(function()
-                loadstring(game:HttpGet('https://pastefy.app/6ElsMLeb/raw', true))()
-            end)
-            Library:Notify('Unlock All spusten.', 5)
-        end
-    end
-})
-
-----------------------------------------------------------------
--- HIT SOUNDS
-----------------------------------------------------------------
-local hitSoundsGroup = Tabs.Misc:AddRightGroupbox('Hit Sounds')
-
-local hitSounds = {
-    Enabled = false,
-    Style = 'Rust HS',
-    Volume = 0.5,
-    Pitch = 1.0,
-}
-
+local hitSounds = { Enabled = false, Style = 'Rust HS', Volume = 0.5, Pitch = 1.0 }
 local folderName = 'Hitsounds'
 local soundFolder = folderName .. '/sounds'
 
-local allSounds = {
-    'Among Us', 'Bonk', 'Bruh', 'Fart', 'Minecraft',
-    'Neverlose', 'Osu', 'Stars', 'Rust HS', 'Vine',
-}
+local allSounds = { 'Among Us', 'Bonk', 'Bruh', 'Fart', 'Minecraft', 'Neverlose', 'Osu', 'Stars', 'Rust HS', 'Vine' }
 local soundFiles = {
-    ['Among Us'] = 'amongus.mp3',
-    ['Bonk'] = 'bonk.mp3',
-    ['Bruh'] = 'bruh.mp3',
-    ['Fart'] = 'fart.mp3',
-    ['Minecraft'] = 'minecraft.mp3',
-    ['Neverlose'] = 'neverlose.mp3',
-    ['Osu'] = 'osu.mp3',
-    ['Stars'] = 'Stars.mp3',
-    ['Rust HS'] = 'rust hs.mp3',
-    ['Vine'] = 'vine.mp3',
+    ['Among Us'] = 'amongus.mp3', ['Bonk'] = 'bonk.mp3', ['Bruh'] = 'bruh.mp3', ['Fart'] = 'fart.mp3',
+    ['Minecraft'] = 'minecraft.mp3', ['Neverlose'] = 'neverlose.mp3', ['Osu'] = 'osu.mp3',
+    ['Stars'] = 'Stars.mp3', ['Rust HS'] = 'rust hs.mp3', ['Vine'] = 'vine.mp3',
 }
 
-local function downloadHitSounds()
-    if not isfolder(folderName) then makefolder(folderName) end
-    if not isfolder(soundFolder) then makefolder(soundFolder) end
-    local links = {
-        ['amongus.mp3']    = 'https://www.myinstants.com/media/sounds/roblox-death-sound_ytkBL7X.mp3',
-        ['minecraft.mp3']  = 'https://www.myinstants.com/media/sounds/steve-old-hurt-sound_XKZxUk4.mp3',
-        ['bruh.mp3']       = 'https://www.myinstants.com/media/sounds/discord-notification.mp3',
-        ['fart.mp3']       = 'https://www.myinstants.com/media/sounds/fart-moan3.mp3',
-        ['neverlose.mp3']  = 'https://www.myinstants.com/media/sounds/neverlose-s.mp3',
-        ['rust hs.mp3']    = 'https://www.myinstants.com/media/sounds/eaolwpzhgsba.mp3',
-        ['osu.mp3']        = 'https://www.myinstants.com/media/sounds/osu-hit-sound.mp3',
-        ['Stars.mp3']      = 'https://www.myinstants.com/media/sounds/starshitsound.mp3',
-        ['bonk.mp3']       = 'https://www.myinstants.com/media/sounds/bonk.mp3',
-        ['vine.mp3']       = 'https://www.myinstants.com/media/sounds/vine-boom.mp3',
-    }
-    for filename, link in pairs(links) do
-        local fullPath = soundFolder .. '/' .. filename
-        if not isfile(fullPath) then
-            pcall(function()
-                writefile(fullPath, game:HttpGet(link, true))
-            end)
-            task.wait(0.5)
+safe('Hit Sounds', function()
+    local G = Tabs.Misc:AddRightGroupbox('Hit Sounds')
+
+    task.spawn(function()
+        if not isfolder(folderName) then makefolder(folderName) end
+        if not isfolder(soundFolder) then makefolder(soundFolder) end
+        local links = {
+            ['amongus.mp3']    = 'https://www.myinstants.com/media/sounds/roblox-death-sound_ytkBL7X.mp3',
+            ['minecraft.mp3']  = 'https://www.myinstants.com/media/sounds/steve-old-hurt-sound_XKZxUk4.mp3',
+            ['bruh.mp3']       = 'https://www.myinstants.com/media/sounds/discord-notification.mp3',
+            ['fart.mp3']       = 'https://www.myinstants.com/media/sounds/fart-moan3.mp3',
+            ['neverlose.mp3']  = 'https://www.myinstants.com/media/sounds/neverlose-s.mp3',
+            ['rust hs.mp3']    = 'https://www.myinstants.com/media/sounds/eaolwpzhgsba.mp3',
+            ['osu.mp3']        = 'https://www.myinstants.com/media/sounds/osu-hit-sound.mp3',
+            ['Stars.mp3']      = 'https://www.myinstants.com/media/sounds/starshitsound.mp3',
+            ['bonk.mp3']       = 'https://www.myinstants.com/media/sounds/bonk.mp3',
+            ['vine.mp3']       = 'https://www.myinstants.com/media/sounds/vine-boom.mp3',
+        }
+        for filename, link in pairs(links) do
+            local fullPath = soundFolder .. '/' .. filename
+            if not isfile(fullPath) then
+                pcall(function() writefile(fullPath, game:HttpGet(link, true)) end)
+                task.wait(0.5)
+            end
         end
-    end
-end
-
-task.spawn(downloadHitSounds)
-
-local function playHitSound()
-    if not hitSounds.Enabled then return end
-    local filename = soundFiles[hitSounds.Style] or soundFiles['Rust HS']
-    local fullPath = soundFolder .. '/' .. filename
-    if not isfile(fullPath) then
-        fullPath = soundFolder .. '/rust hs.mp3'
-        if not isfile(fullPath) then return end
-    end
-    local asset
-    pcall(function()
-        asset = getsynasset and getsynasset(fullPath) or getcustomasset(fullPath)
     end)
-    if not asset then return end
-    local sound = Instance.new('Sound')
-    sound.SoundId = asset
-    sound.Volume = hitSounds.Volume
-    sound.PlaybackSpeed = hitSounds.Pitch
-    sound.Parent = workspace
-    sound:Play()
-    task.delay(5, function() if sound and sound.Parent then sound:Destroy() end end)
-end
 
-local function getDamageInfo(obj)
-    if not obj:IsA('BillboardGui') then return nil end
-    if obj.Name == 'FortniteDamageNumber' then return nil end
-    local lbl = obj:FindFirstChildWhichIsA('TextLabel', true)
-    if not lbl then return nil end
-    local dmg = tonumber(lbl.Text)
-    if not (dmg and dmg > 0) then return nil end
-    return true
-end
+    local function playHitSound()
+        if not hitSounds.Enabled then return end
+        local filename = soundFiles[hitSounds.Style] or soundFiles['Rust HS']
+        local fullPath = soundFolder .. '/' .. filename
+        if not isfile(fullPath) then return end
+        local asset
+        pcall(function()
+            asset = (getsynasset and getsynasset(fullPath)) or getcustomasset(fullPath)
+        end)
+        if not asset then return end
+        local sound = Instance.new('Sound')
+        sound.SoundId = asset
+        sound.Volume = hitSounds.Volume
+        sound.PlaybackSpeed = hitSounds.Pitch
+        sound.Parent = workspace
+        sound:Play()
+        task.delay(5, function() if sound and sound.Parent then sound:Destroy() end end)
+    end
 
-hitSoundsGroup:AddToggle('HitSoundsEnabled', { Text = 'Enable', Default = false })
-    :OnChanged(function(v) hitSounds.Enabled = v end)
+    G:AddToggle('HitSoundsEnabled', { Text = 'Enable', Default = false })
+        :OnChanged(function(v) hitSounds.Enabled = v end)
+    G:AddDropdown('HitSoundsStyle', { Text = 'Sound', Default = 'Rust HS', Values = allSounds, Multi = false })
+        :OnChanged(function(v) hitSounds.Style = v end)
+    G:AddSlider('HitSoundsVolume', { Text = 'Volume', Default = 50, Min = 1, Max = 100, Rounding = 0, Compact = true })
+        :OnChanged(function(v) hitSounds.Volume = v / 100 end)
+    G:AddSlider('HitSoundsPitch', { Text = 'Pitch', Default = 100, Min = 50, Max = 200, Rounding = 0, Compact = true })
+        :OnChanged(function(v) hitSounds.Pitch = v / 100 end)
 
-hitSoundsGroup:AddDropdown('HitSoundsStyle', {
-    Text = 'Sound', Default = 'Rust HS', Values = allSounds, Multi = false,
-}):OnChanged(function(v) hitSounds.Style = v end)
-
-hitSoundsGroup:AddSlider('HitSoundsVolume', { Text = 'Volume', Default = 50, Min = 1, Max = 100, Rounding = 0, Compact = true })
-    :OnChanged(function(v) hitSounds.Volume = v / 100 end)
-
-hitSoundsGroup:AddSlider('HitSoundsPitch', { Text = 'Pitch', Default = 100, Min = 50, Max = 200, Rounding = 0, Compact = true })
-    :OnChanged(function(v) hitSounds.Pitch = v / 100 end)
-
--- Detekce zásahu přes BillboardGui
-workspace.DescendantAdded:Connect(function(obj)
-    if not hitSounds.Enabled then return end
-    if not obj:IsA('BillboardGui') then return end
-    task.defer(function()
-        if getDamageInfo(obj) then
-            playHitSound()
-        end
+    workspace.DescendantAdded:Connect(function(obj)
+        if not hitSounds.Enabled then return end
+        if not obj:IsA('BillboardGui') then return end
+        if obj.Name == 'FortniteDamageNumber' then return end
+        task.defer(function()
+            local lbl = obj:FindFirstChildWhichIsA('TextLabel', true)
+            if lbl and tonumber(lbl.Text) and tonumber(lbl.Text) > 0 then
+                playHitSound()
+            end
+        end)
     end)
 end)
-
-log('Misc tab built')
 
 ----------------------------------------------------------------
 -- SETTINGS
 ----------------------------------------------------------------
 local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
 
-MenuGroup:AddButton({
-    Text = 'Unload',
-    Func = function() Library:Unload() end,
-    Tooltip = 'Fully removes the script',
-})
+safe('Settings', function()
+    MenuGroup:AddButton({ Text = 'Unload', Func = function() Library:Unload() end })
 
-local WatermarkEnabled = false
-local lastText = ''
+    local WatermarkEnabled = false
+    local lastText = ''
 
-MenuGroup:AddToggle('WatermarkToggle', { Text = 'Show watermark', Default = false })
-Toggles.WatermarkToggle:OnChanged(function()
-    WatermarkEnabled = Toggles.WatermarkToggle.Value
-    Library:SetWatermarkVisibility(WatermarkEnabled)
-end)
+    MenuGroup:AddToggle('WatermarkToggle', { Text = 'Show watermark', Default = false })
+        :OnChanged(function()
+            WatermarkEnabled = Toggles.WatermarkToggle.Value
+            Library:SetWatermarkVisibility(WatermarkEnabled)
+        end)
 
-MenuGroup:AddToggle('KeybindListToggle', { Text = 'Show keybind list', Default = false })
-Toggles.KeybindListToggle:OnChanged(function()
-    Library.KeybindFrame.Visible = Toggles.KeybindListToggle.Value
-end)
+    MenuGroup:AddToggle('KeybindListToggle', { Text = 'Show keybind list', Default = false })
+        :OnChanged(function()
+            Library.KeybindFrame.Visible = Toggles.KeybindListToggle.Value
+        end)
 
-MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
-    Default = 'RightShift', NoUI = true, Text = 'Menu keybind',
-})
+    MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
+        Default = 'RightShift', NoUI = true, Text = 'Menu keybind',
+    })
+    Library.ToggleKeybind = Options.MenuKeybind
 
-Library.ToggleKeybind = Options.MenuKeybind
-
-task.spawn(function()
-    while not Library.Unloaded do
-        task.wait(2)
-        if WatermarkEnabled then
-            local fps = math.floor(1 / RunService.RenderStepped:Wait())
-            local ping = 0
-            pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
-            local text = ('Rivals | %d fps | %d ms'):format(fps, math.floor(ping))
-            if text ~= lastText then
-                lastText = text
-                Library:SetWatermark(text)
+    task.spawn(function()
+        while not Library.Unloaded do
+            task.wait(2)
+            if WatermarkEnabled then
+                local fps = math.floor(1 / RunService.RenderStepped:Wait())
+                local ping = 0
+                pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
+                local text = ('Rivals | %d fps | %d ms'):format(fps, math.floor(ping))
+                if text ~= lastText then
+                    lastText = text
+                    Library:SetWatermark(text)
+                end
             end
         end
-    end
+    end)
 end)
 
 Library:SetWatermarkVisibility(false)
@@ -772,25 +707,20 @@ Library.KeybindFrame.Visible = false
 
 Library:OnUnload(function()
     removeAllESP()
-    if fovContainer then pcall(function() fovContainer:Destroy() end) end
-    if fovScreenGui then pcall(function() fovScreenGui:Destroy() end) end
+    if fovContainer then pcall(function() fovContainer.Parent:Destroy() end) end
     Library.Unloaded = true
 end)
 
-log('Settings tab built')
-
 ----------------------------------------------------------------
--- ADD-ONY: ThemeManager + SaveManager
+-- ADD-ONS
 ----------------------------------------------------------------
 task.spawn(function()
     task.wait(1)
     if Library.Unloaded then return end
     local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
-    log('ThemeManager loaded')
     task.wait()
     if Library.Unloaded then return end
     local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
-    log('SaveManager loaded')
     task.wait()
     if Library.Unloaded then return end
 
@@ -801,15 +731,11 @@ task.spawn(function()
     ThemeManager:SetFolder('MyScriptHub')
     SaveManager:SetFolder('MyScriptHub/specific-game')
     task.wait()
-
     SaveManager:BuildConfigSection(Tabs.Settings)
     task.wait()
-    if Library.Unloaded then return end
     ThemeManager:ApplyToTab(Tabs.Settings)
     task.wait()
-    if Library.Unloaded then return end
     SaveManager:LoadAutoloadConfig()
-    log('Add-ons ready')
 end)
 
 print('[menu] Nacteno. Menu = RightShift.')

@@ -1,5 +1,5 @@
 -- LinoriaLib menu: Main | Visuals | Settings
--- Startup-optimized: add-ons load in the background, UI built in stages
+-- Silent aim přes Utility.Raycast hook (open-source metoda pro Rivals)
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
@@ -21,6 +21,7 @@ local RunService = game:GetService('RunService')
 local Players = game:GetService('Players')
 local Stats = game:GetService('Stats')
 local UIS = game:GetService('UserInputService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
 local LocalPlayer = Players.LocalPlayer
 
 local Window = Library:CreateWindow({
@@ -75,7 +76,6 @@ LeftGroupBox:AddToggle('SATeam', { Text = 'Team check', Default = true })
     :OnChanged(function(v) SilentAim.TeamCheck = v end)
 
 log('Main tab built')
-task.wait()
 
 ----------------------------------------------------------------
 -- SILENT AIM LOGIKA
@@ -89,16 +89,15 @@ UIS.InputEnded:Connect(function(input)
     if input.KeyCode == aimKey then SilentAim.KeyHeld = false end
 end)
 
-task.spawn(function()
-    while not Library.Unloaded do
-        task.wait(0.5)
-        local opt = Options and Options.SAKey
-        if opt and type(opt.Value) == 'string' then
-            local ok, code = pcall(function() return Enum.KeyCode[opt.Value] end)
+if Options and Options.SAKey then
+    Options.SAKey:OnChanged(function()
+        local v = Options.SAKey.Value
+        if type(v) == 'string' then
+            local ok, code = pcall(function() return Enum.KeyCode[v] end)
             if ok and code then aimKey = code end
         end
-    end
-end)
+    end)
+end
 
 local function isActive()
     if not SilentAim.Enabled then return false end
@@ -149,33 +148,43 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
--- === KLÍČOVÝ HOOK PRO RIVALS ===
--- Rivals používá Utility.Raycast z ReplicatedStorage.Modules.Utility
--- Tento open-source hook zachytí volání z ClientFighter.StartShooting.Gun
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Utility = require(ReplicatedStorage.Modules.Utility)
-
+-- === SILENT AIM HOOK: Utility.Raycast (open-source metoda pro Rivals) ===
+local raycastHooked = false
 local OldRaycast
-OldRaycast = hookfunction(Utility.Raycast, function(...)
-    local Args = { ... }
-    local Traceback = debug.traceback()
 
-    -- Kontrola, zda jde o střelu z Gunu (nikoliv tracery nebo replikaci)
-    if Traceback:find("ClientFighter") and Traceback:find("StartShooting")
-       and Traceback:find("Gun") and not Traceback:find("ReplicatedController")
-       and not Traceback:find("Tracers") then
+pcall(function()
+    local Utility = require(ReplicatedStorage.Modules.Utility)
 
-        if SilentAim.Target and SilentAim.Target.Parent then
-            -- Args[3] je direction, Args[4] je vzdálenost
-            -- Přepíšeme směr na cíl
-            local camPos = workspace.CurrentCamera.CFrame.Position
-            local dir = (SilentAim.Target.Position - camPos).Unit
-            Args[3] = dir
+    OldRaycast = hookfunction(Utility.Raycast, function(...)
+        local Traceback = debug.traceback()
+        local Args = { ... }
+
+        -- Detekce střely z Gunu (ne tracer, ne replikace)
+        if Traceback:find("ClientFighter") and Traceback:find("StartShooting")
+           and Traceback:find("Gun") and not Traceback:find("ReplicatedController")
+           and not Traceback:find("Tracers") then
+
+            if SilentAim.Target and SilentAim.Target.Parent then
+                local camPos = workspace.CurrentCamera.CFrame.Position
+                local targetPos = SilentAim.Target.Position
+
+                -- Args[3] = směr, Args[4] = vzdálenost
+                Args[3] = (targetPos - camPos).Unit
+                Args[4] = 999
+            end
         end
-    end
 
-    return OldRaycast(table.unpack(Args))
+        return OldRaycast(table.unpack(Args))
+    end)
+
+    raycastHooked = true
+    log('Utility.Raycast hooked')
 end)
+
+if not raycastHooked then
+    warn('[menu] Nepodarilo se hooknout Utility.Raycast!')
+    Library:Notify('Silent aim hook selhal – Utility.Raycast nebyl nalezen.', 10)
+end
 
 log('Silent aim ready')
 
@@ -206,10 +215,8 @@ local espOk, espErr = pcall(function()
     ESPSettings:AddToggle('ESPTeamCheck', { Text = 'Hide teammates', Default = false })
 
     log('Visuals tab built')
-    task.wait()
 
     local HAS_DRAWING = (Drawing ~= nil)
-
     local ESP_TOGGLES = { 'ESPBox', 'ESPSkeleton', 'ESPName', 'ESPDist', 'ESPHealth', 'ESPHealthText', 'ESPWeapon' }
 
     local R15_BONES = {
@@ -223,15 +230,12 @@ local espOk, espErr = pcall(function()
         { 'Head', 'Torso' }, { 'Torso', 'Left Arm' }, { 'Torso', 'Right Arm' },
         { 'Torso', 'Left Leg' }, { 'Torso', 'Right Leg' },
     }
-
     local WEAPON_ATTRS = { 'EquippedWeapon', 'CurrentWeapon', 'Weapon', 'Equipped' }
 
     local ESP = {}
     local espConn
 
-    local function safeRemove(d)
-        pcall(function() d:Remove() end)
-    end
+    local function safeRemove(d) pcall(function() d:Remove() end) end
 
     local function newText(size)
         local t = Drawing.new('Text')
@@ -522,11 +526,17 @@ end)
 
 Library:OnUnload(function()
     ESPCleanup()
+    if OldRaycast and raycastHooked then
+        pcall(function()
+            local Utility = require(ReplicatedStorage.Modules.Utility)
+            hookfunction(Utility.Raycast, OldRaycast)
+        end)
+    end
     Library.Unloaded = true
 end)
 
 ----------------------------------------------------------------
--- SETTINGS (s ThemeManager a SaveManager)
+-- SETTINGS – Menu
 ----------------------------------------------------------------
 local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu')
 
@@ -551,37 +561,26 @@ MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'RightSh
 
 Library.ToggleKeybind = Options.MenuKeybind
 
+log('Settings – Menu group ready')
+
+----------------------------------------------------------------
+-- ADD-ONY: ThemeManager + SaveManager (synchronně)
+----------------------------------------------------------------
+local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+log('ThemeManager + SaveManager loaded')
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+ThemeManager:SetFolder('MyScriptHub')
+SaveManager:SetFolder('MyScriptHub/specific-game')
+
+SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:LoadAutoloadConfig()
+
 log('Menu ready')
 
-----------------------------------------------------------------
--- ADD-ONS (ThemeManager + SaveManager)
-----------------------------------------------------------------
-task.spawn(function()
-    task.wait(1)
-    if Library.Unloaded then return end
-    local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
-    log('ThemeManager loaded')
-    task.wait()
-    if Library.Unloaded then return end
-    local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
-    log('SaveManager loaded')
-    task.wait()
-    if Library.Unloaded then return end
-
-    ThemeManager:SetLibrary(Library)
-    SaveManager:SetLibrary(Library)
-    SaveManager:IgnoreThemeSettings()
-    SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
-    ThemeManager:SetFolder('MyScriptHub')
-    SaveManager:SetFolder('MyScriptHub/specific-game')
-    task.wait()
-
-    SaveManager:BuildConfigSection(Tabs.Settings)
-    task.wait()
-    if Library.Unloaded then return end
-    ThemeManager:ApplyToTab(Tabs.Settings)
-    task.wait()
-    if Library.Unloaded then return end
-    SaveManager:LoadAutoloadConfig()
-    log('Add-ons ready')
-end)
+print('[menu] Nacteno. Menu = RightShift.')

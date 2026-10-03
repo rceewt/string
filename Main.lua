@@ -1,6 +1,37 @@
--- LinoriaLib menu: Main | Visuals | Settings
--- Startup-optimized: add-ons load in the background, UI built in stages
+-- ============================================================
+-- NUKE: Vyčistí zombie smyčky z předchozích běhů
+-- ============================================================
+do
+    local env = getgenv and getgenv() or _G
+    for k, v in pairs(env) do
+        if type(k) == 'string' and k:match('^__') then
+            pcall(function() env[k] = nil end)
+        end
+    end
+    if Drawing and Drawing.clear then
+        pcall(function() Drawing.clear() end)
+    end
+    if getconnections then
+        pcall(function()
+            local RS = game:GetService('RunService')
+            for _, c in pairs(getconnections(RS.RenderStepped)) do
+                pcall(function() c:Disconnect() end)
+            end
+            for _, c in pairs(getconnections(RS.Heartbeat)) do
+                pcall(function() c:Disconnect() end)
+            end
+            for _, c in pairs(getconnections(RS.Stepped)) do
+                pcall(function() c:Disconnect() end)
+            end
+        end)
+    end
+    print('[NUKE] Hotovo')
+end
+task.wait(1)
 
+-- ============================================================
+-- LinoriaLib menu: Main | Visuals | Settings
+-- ============================================================
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
 
@@ -89,7 +120,6 @@ UIS.InputEnded:Connect(function(input)
     if input.KeyCode == aimKey then SilentAim.KeyHeld = false end
 end)
 
--- Aktualizace klávesy z KeyPickeru
 task.spawn(function()
     while not Library.Unloaded do
         task.wait(0.5)

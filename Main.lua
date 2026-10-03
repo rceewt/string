@@ -1,5 +1,6 @@
 -- LinoriaLib menu: Main | Visuals (ESP) | Settings
--- OPRAVENO: Silent aim hook pro Rivals + GetCameraData hook + cleanup.
+-- OPRAVENO: Odstraněn GetCameraData hookfunction – způsoboval pád.
+-- Ponechán pouze bezpečný __namecall hook pro Raycast/RaycastAll.
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
@@ -164,8 +165,8 @@ local function getTargetPart()
                        and plr.Team == LocalPlayer.Team then skip = true end
                     if not skip then
                         local part = char:FindFirstChild(SilentAim.Part)
-                        if not part and SilentAim.Part ~= 'Torso' then
-                            part = char:FindFirstChild('Torso') or char:FindFirstChild('UpperTorso') or char:FindFirstChild('Head')
+                        if not part then
+                            part = char:FindFirstChild('Head') or char:FindFirstChild('UpperTorso') or char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso')
                         end
                         if part then
                             local sp, onScreen = cam:WorldToViewportPoint(part.Position)
@@ -229,7 +230,6 @@ local silentAimConn = RunService.RenderStepped:Connect(function()
         SilentAim.Target = nil
     end
 
-    -- Debug vypis kazdou sekundu
     if SilentAim.Debug and tick() - lastDbg > 1 then
         lastDbg = tick()
         local status = SilentAim.Enabled and 'ON' or 'OFF'
@@ -240,8 +240,7 @@ end)
 addCleanup(function() silentAimConn:Disconnect() end)
 
 -- ============================================================
--- OPRAVENÝ HOOK PRO RIVALS – zachytává interní Utility.Raycast
--- i Camera:GetCameraData, které hra používá pro střelbu.
+-- BEZPEČNÝ HOOK PRO RIVALS – pouze __namecall, bez hookfunction
 -- ============================================================
 local oldNamecall
 oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
@@ -251,10 +250,10 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
 
     local method = getnamecallmethod()
     local target = SilentAim.Target
-    local cam = workspace.CurrentCamera
 
-    -- 1) Původní cesty (ScreenPointToRay / ViewportPointToRay)
+    -- 1) ScreenPointToRay / ViewportPointToRay
     if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
+        local cam = workspace.CurrentCamera
         if cam then
             local camPos = cam.CFrame.Position
             local dir = target.Position - camPos
@@ -266,9 +265,10 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
         end
     end
 
-    -- 2) Přímé raycasty
+    -- 2) FindPartOnRay*
     if method == 'FindPartOnRay' or method == 'FindPartOnRayWithIgnoreList'
        or method == 'FindPartOnRayWithWhitelist' then
+        local cam = workspace.CurrentCamera
         if cam then
             local camPos = cam.CFrame.Position
             local args = { ... }
@@ -279,18 +279,19 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
         end
     end
 
-    -- 3) Interní Utility.Raycast (Vector3 origin, Vector3 direction)
+    -- 3) Raycast / RaycastAll – Vector3 origin, Vector3 direction
     if method == 'Raycast' or method == 'RaycastAll' then
         local args = { ... }
+        -- varianta (origin: Vector3, direction: Vector3, ...)
         if typeof(args[1]) == 'Vector3' and typeof(args[2]) == 'Vector3' then
-            local newDir = (target.Position - args[1])
+            local newDir = target.Position - args[1]
             if newDir.Magnitude > 0 then
-                newDir = newDir.Unit * args[2].Magnitude
-                args[2] = newDir
+                args[2] = newDir.Unit * args[2].Magnitude
                 return oldNamecall(self, table.unpack(args))
             end
+        -- varianta (ray: Ray, ...)
         elseif typeof(args[1]) == 'Ray' then
-            args[1] = Ray.new(args[1].Origin, (target.Position - args[1].Origin))
+            args[1] = Ray.new(args[1].Origin, target.Position - args[1].Origin)
             return oldNamecall(self, table.unpack(args))
         end
     end
@@ -303,34 +304,6 @@ addCleanup(function()
         hookmetamethod(game, '__namecall', oldNamecall)
     end)
 end)
-
--- ============================================================
--- DODATEČNÝ HOOK: Camera:GetCameraData
--- Axon Hub pro Rivals hookuje tuto metodu pro silent aim.
--- ============================================================
-local oldGetCameraData
-if hookfunction and workspace.CurrentCamera and workspace.CurrentCamera.GetCameraData then
-    local camDataRef = workspace.CurrentCamera
-    oldGetCameraData = hookfunction(camDataRef.GetCameraData, function(self, ...)
-        local data = oldGetCameraData(self, ...)
-        if SilentAim.Target ~= nil and data and typeof(data) == 'table' then
-            local camPos = self.CFrame.Position
-            local dir = (SilentAim.Target.Position - camPos)
-            if dir.Magnitude > 0 then
-                pcall(function() data.Direction = dir.Unit end)
-                pcall(function() data.LookVector = dir.Unit end)
-            end
-        end
-        return data
-    end)
-    addCleanup(function()
-        pcall(function()
-            if oldGetCameraData and camDataRef and camDataRef.GetCameraData then
-                hookfunction(camDataRef.GetCameraData, oldGetCameraData)
-            end
-        end)
-    end)
-end
 
 log('Silent aim ready')
 

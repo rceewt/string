@@ -1,6 +1,8 @@
--- LinoriaLib menu: Main | Visuals (ESP) | Settings
--- OPRAVENO: Bezpečný namecall hook – vše v pcall, table.pack/unpack,
--- kontrola Parent, žádné přímé dereference. Crash by měl zmizet.
+-- LinoriaLib menu: Main | Visuals | Settings
+-- OPRAVENO: Defenzivní přístup k RunService – všechny přístupy obaleny kontrolou.
+-- Chyba "attempt to index nil with 'RenderStepped'" znamená, že RunService
+-- je v některé closure nil (typicky po re-execuci, kdy staré closures přežívají
+-- a odkazují se na vyčištěné globální proměnné).
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
@@ -8,6 +10,26 @@ local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0))
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
 local env = getgenv and getgenv() or _G
+
+-- ============================================================
+-- BEZPEČNÉ ZÍSKÁNÍ SLUŽEB
+-- ============================================================
+local function getService(name)
+    local ok, svc = pcall(function() return game:GetService(name) end)
+    if ok and svc then return svc end
+    return nil
+end
+
+local RunService = getService('RunService')
+local Players = getService('Players')
+local Stats = getService('Stats')
+local UIS = getService('UserInputService')
+local LocalPlayer = Players and Players.LocalPlayer or nil
+
+if not RunService or not Players or not UIS then
+    warn('[menu] Nelze získat základní služby – skript ukončen.')
+    return
+end
 
 -- ============================================================
 -- GLOBÁLNÍ CLEANUP PŘEDCHOZÍ INSTANCE
@@ -37,12 +59,6 @@ end
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
 env.__MenuLibrary = Library
 log('Library loaded')
-
-local RunService = game:GetService('RunService')
-local Players = game:GetService('Players')
-local Stats = game:GetService('Stats')
-local UIS = game:GetService('UserInputService')
-local LocalPlayer = Players.LocalPlayer
 
 local Window = Library:CreateWindow({
     Title = 'Example menu',
@@ -209,35 +225,45 @@ if Drawing then
     end
 end
 
--- Okamžitý testovací výpis při spuštění
+-- Okamžitý testovací výpis
 print('[SA] === Silent Aim nacten ===')
-print('[SA] Executor ma Drawing:', tostring(Drawing ~= nil))
-print('[SA] Executor ma hookmetamethod:', tostring(hookmetamethod ~= nil))
-print('[SA] Executor ma getnamecallmethod:', tostring(getnamecallmethod ~= nil))
+print('[SA] Drawing:', tostring(Drawing ~= nil))
+print('[SA] hookmetamethod:', tostring(hookmetamethod ~= nil))
+print('[SA] getnamecallmethod:', tostring(getnamecallmethod ~= nil))
 print('[SA] LocalPlayer:', LocalPlayer and LocalPlayer.Name or 'NIL')
-print('[SA] CurrentCamera:', tostring(workspace.CurrentCamera ~= nil))
+print('[SA] RunService:', tostring(RunService ~= nil))
 
-local silentAimConn = RunService.RenderStepped:Connect(function()
-    if fovCircle then
-        local cam = workspace.CurrentCamera
-        if SilentAim.Enabled and SilentAim.ShowFOV and cam then
-            local vp = cam.ViewportSize
-            fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
-            fovCircle.Radius = SilentAim.FOV
-            if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
-            fovCircle.Visible = true
-        else
-            fovCircle.Visible = false
+-- ============================================================
+-- OPRAVA: Defenzivní RenderStepped – kontrola před každým přístupem
+-- ============================================================
+local rs = RunService
+if not rs then
+    Library:Notify('RunService je nil – nelze spustit smyčky.', 10)
+else
+    local silentAimConn = rs.RenderStepped:Connect(function()
+        if fovCircle then
+            local cam = workspace.CurrentCamera
+            if SilentAim.Enabled and SilentAim.ShowFOV and cam then
+                local vp = cam.ViewportSize
+                fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+                fovCircle.Radius = SilentAim.FOV
+                if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
+                fovCircle.Visible = true
+            else
+                fovCircle.Visible = false
+            end
         end
-    end
 
-    if isActive() then
-        SilentAim.Target = getTargetPart()
-    else
-        SilentAim.Target = nil
-    end
-end)
-addCleanup(function() silentAimConn:Disconnect() end)
+        if isActive() then
+            SilentAim.Target = getTargetPart()
+        else
+            SilentAim.Target = nil
+        end
+    end)
+    addCleanup(function()
+        pcall(function() silentAimConn:Disconnect() end)
+    end)
+end
 
 -- Nezávislá debug smyčka
 task.spawn(function()
@@ -254,28 +280,22 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- BEZPEČNÝ HOOK – vše v pcall, table.pack/unpack, kontrola Parent
+-- BEZPEČNÝ HOOK
 -- ============================================================
 local oldNamecall
 oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
-    -- Pokud silent aim nemá cíl, okamžitě se vrať bez jakékoliv práce
     if SilentAim.Target == nil then
         return oldNamecall(self, ...)
     end
 
-    -- Vše v pcall, aby jakákoliv chyba nezpůsobila crash
     local ok, result = pcall(function()
         local method = getnamecallmethod()
         local target = SilentAim.Target
 
-        -- Cíl mohl být mezitím zničen
-        if not target or not target.Parent then
-            return nil
-        end
+        if not target or not target.Parent then return nil end
 
         local targetPos = target.Position
 
-        -- 1) ScreenPointToRay / ViewportPointToRay
         if method == 'ScreenPointToRay' or method == 'ViewportPointToRay' then
             local cam = workspace.CurrentCamera
             if cam then
@@ -289,7 +309,6 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
             end
         end
 
-        -- 2) FindPartOnRay* – pouze pokud args[1] je Ray
         if method == 'FindPartOnRay' or method == 'FindPartOnRayWithIgnoreList'
            or method == 'FindPartOnRayWithWhitelist' then
             local cam = workspace.CurrentCamera
@@ -302,7 +321,6 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
             end
         end
 
-        -- 3) Raycast / RaycastAll – Vector3 origin, Vector3 direction
         if method == 'Raycast' or method == 'RaycastAll' then
             local args = table.pack(...)
             if typeof(args[1]) == 'Vector3' and typeof(args[2]) == 'Vector3' then
@@ -320,12 +338,7 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
         return nil
     end)
 
-    -- Pokud pcall uspěl a vrátil hodnotu, použij ji
-    if ok and result ~= nil then
-        return result
-    end
-
-    -- Jinak zavolej původní metodu beze změny
+    if ok and result ~= nil then return result end
     return oldNamecall(self, ...)
 end))
 
@@ -622,7 +635,7 @@ local espOk, espErr = pcall(function()
                 return
             end
             local lastErr
-            espConn = RunService.RenderStepped:Connect(function()
+            espConn = rs.RenderStepped:Connect(function()
                 local ok, err = pcall(updateESP)
                 if not ok and err ~= lastErr then
                     lastErr = err
@@ -671,8 +684,8 @@ local lastText = ''
 task.spawn(function()
     while not Library.Unloaded do
         task.wait(2)
-        if WatermarkEnabled then
-            local fps = math.floor(1 / RunService.RenderStepped:Wait())
+        if WatermarkEnabled and rs and Stats then
+            local fps = math.floor(1 / rs.RenderStepped:Wait())
             local ping = 0
             pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
             local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))

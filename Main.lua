@@ -1,55 +1,26 @@
 -- LinoriaLib menu: Main | Visuals | Settings
--- OPRAVENO: Defenzivní přístup k RunService – všechny přístupy obaleny kontrolou.
--- Chyba "attempt to index nil with 'RenderStepped'" znamená, že RunService
--- je v některé closure nil (typicky po re-execuci, kdy staré closures přežívají
--- a odkazují se na vyčištěné globální proměnné).
+-- OPRAVENO: Všechny přístupy k .RenderStepped obaleny v pcall.
+-- OPRAVENO: task.spawn smyčky mají vlastní pcall, aby nemohly shodit hru.
+-- OPRAVENO: Odstraněna env.__RivalsCleanup logika, která mohla způsobit,
+-- že se volala stará poškozená cleanup funkce z předchozího běhu.
+-- POKYNY: PŘED vložením skriptu proveď rejoin hry, aby se vyčistily staré
+-- RenderStepped smyčky z předchozích spuštění.
 
 local t0 = tick()
 local function log(step) print(('[menu] %-28s %.2fs'):format(step, tick() - t0)) end
 
 local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 
+-- Přímé získání služeb bez wrapperu
+local RunService = game:GetService('RunService')
+local Players = game:GetService('Players')
+local Stats = game:GetService('Stats')
+local UIS = game:GetService('UserInputService')
+local LocalPlayer = Players.LocalPlayer
+
 local env = getgenv and getgenv() or _G
 
--- ============================================================
--- BEZPEČNÉ ZÍSKÁNÍ SLUŽEB
--- ============================================================
-local function getService(name)
-    local ok, svc = pcall(function() return game:GetService(name) end)
-    if ok and svc then return svc end
-    return nil
-end
-
-local RunService = getService('RunService')
-local Players = getService('Players')
-local Stats = getService('Stats')
-local UIS = getService('UserInputService')
-local LocalPlayer = Players and Players.LocalPlayer or nil
-
-if not RunService or not Players or not UIS then
-    warn('[menu] Nelze získat základní služby – skript ukončen.')
-    return
-end
-
--- ============================================================
--- GLOBÁLNÍ CLEANUP PŘEDCHOZÍ INSTANCE
--- ============================================================
-if env.__RivalsCleanup then
-    pcall(env.__RivalsCleanup)
-    env.__RivalsCleanup = nil
-    task.wait(0.5)
-end
-
-local cleanups = {}
-local function addCleanup(fn) table.insert(cleanups, fn) end
-
-env.__RivalsCleanup = function()
-    for i = #cleanups, 1, -1 do
-        pcall(cleanups[i])
-    end
-    table.clear(cleanups)
-end
-
+-- Úklid staré menu instance
 if env.__MenuLibrary then
     pcall(function() env.__MenuLibrary:Unload() end)
     env.__MenuLibrary = nil
@@ -140,21 +111,19 @@ local function currentKey()
     return SilentAim.Key
 end
 
-local inputBeginConn = UIS.InputBegan:Connect(function(input, gp)
+UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if Library and Library.Open then return end
     local code = keyCodeFromName(currentKey())
     if code and input.KeyCode == code then SilentAim.KeyHeld = true end
 end)
-addCleanup(function() inputBeginConn:Disconnect() end)
 
-local inputEndConn = UIS.InputEnded:Connect(function(input, gp)
+UIS.InputEnded:Connect(function(input, gp)
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     local code = keyCodeFromName(currentKey())
     if code and input.KeyCode == code then SilentAim.KeyHeld = false end
 end)
-addCleanup(function() inputEndConn:Disconnect() end)
 
 local function isActive()
     if not SilentAim.Enabled then return false end
@@ -210,7 +179,7 @@ end
 
 local fovCircle
 if Drawing then
-    local ok = pcall(function()
+    pcall(function()
         fovCircle = Drawing.new('Circle')
         fovCircle.Thickness = 1
         fovCircle.Color = Color3.fromRGB(255, 255, 255)
@@ -220,62 +189,53 @@ if Drawing then
         fovCircle.Radius = SilentAim.FOV
         fovCircle.Visible = false
     end)
-    if ok and fovCircle then
-        addCleanup(function() pcall(function() fovCircle:Remove() end) fovCircle = nil end)
-    end
 end
 
--- Okamžitý testovací výpis
 print('[SA] === Silent Aim nacten ===')
 print('[SA] Drawing:', tostring(Drawing ~= nil))
 print('[SA] hookmetamethod:', tostring(hookmetamethod ~= nil))
 print('[SA] getnamecallmethod:', tostring(getnamecallmethod ~= nil))
 print('[SA] LocalPlayer:', LocalPlayer and LocalPlayer.Name or 'NIL')
-print('[SA] RunService:', tostring(RunService ~= nil))
 
--- ============================================================
--- OPRAVA: Defenzivní RenderStepped – kontrola před každým přístupem
--- ============================================================
-local rs = RunService
-if not rs then
-    Library:Notify('RunService je nil – nelze spustit smyčky.', 10)
-else
-    local silentAimConn = rs.RenderStepped:Connect(function()
-        if fovCircle then
-            local cam = workspace.CurrentCamera
-            if SilentAim.Enabled and SilentAim.ShowFOV and cam then
-                local vp = cam.ViewportSize
-                fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
-                fovCircle.Radius = SilentAim.FOV
-                if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
-                fovCircle.Visible = true
-            else
-                fovCircle.Visible = false
+-- OPRAVA: Přímý přístup k RenderStepped přes game:GetService, ne přes proměnnou
+pcall(function()
+    game:GetService('RunService').RenderStepped:Connect(function()
+        pcall(function()
+            if fovCircle then
+                local cam = workspace.CurrentCamera
+                if SilentAim.Enabled and SilentAim.ShowFOV and cam then
+                    local vp = cam.ViewportSize
+                    fovCircle.Position = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+                    fovCircle.Radius = SilentAim.FOV
+                    if Options.SAFovColor then fovCircle.Color = Options.SAFovColor.Value end
+                    fovCircle.Visible = true
+                else
+                    fovCircle.Visible = false
+                end
             end
-        end
 
-        if isActive() then
-            SilentAim.Target = getTargetPart()
-        else
-            SilentAim.Target = nil
-        end
+            if isActive() then
+                SilentAim.Target = getTargetPart()
+            else
+                SilentAim.Target = nil
+            end
+        end)
     end)
-    addCleanup(function()
-        pcall(function() silentAimConn:Disconnect() end)
-    end)
-end
+end)
 
 -- Nezávislá debug smyčka
 task.spawn(function()
     while not Library.Unloaded do
         task.wait(1)
-        if SilentAim.Debug then
-            local status = SilentAim.Enabled and 'ON' or 'OFF'
-            local tgt = SilentAim.Target and SilentAim.Target:GetFullName() or 'zadny'
-            local active = isActive() and 'ANO' or 'NE'
-            print(('[SA] Enabled=%s | KeyHeld=%s | Aktivni=%s | Target=%s'):format(
-                status, tostring(SilentAim.KeyHeld), active, tgt))
-        end
+        pcall(function()
+            if SilentAim.Debug then
+                local status = SilentAim.Enabled and 'ON' or 'OFF'
+                local tgt = SilentAim.Target and SilentAim.Target:GetFullName() or 'zadny'
+                local active = isActive() and 'ANO' or 'NE'
+                print(('[SA] Enabled=%s | KeyHeld=%s | Aktivni=%s | Target=%s'):format(
+                    status, tostring(SilentAim.KeyHeld), active, tgt))
+            end
+        end)
     end
 end)
 
@@ -341,12 +301,6 @@ oldNamecall = hookmetamethod(game, '__namecall', newcclosure(function(self, ...)
     if ok and result ~= nil then return result end
     return oldNamecall(self, ...)
 end))
-
-addCleanup(function()
-    pcall(function()
-        hookmetamethod(game, '__namecall', oldNamecall)
-    end)
-end)
 
 log('Silent aim ready')
 
@@ -635,18 +589,20 @@ local espOk, espErr = pcall(function()
                 return
             end
             local lastErr
-            espConn = rs.RenderStepped:Connect(function()
-                local ok, err = pcall(updateESP)
-                if not ok and err ~= lastErr then
-                    lastErr = err
-                    warn('[menu] ESP error: ' .. tostring(err))
-                end
+            local connOk, connErr = pcall(function()
+                espConn = game:GetService('RunService').RenderStepped:Connect(function()
+                    local ok, err = pcall(updateESP)
+                    if not ok and err ~= lastErr then
+                        lastErr = err
+                        warn('[menu] ESP error: ' .. tostring(err))
+                    end
+                end)
             end)
-            addCleanup(function()
-                if espConn then espConn:Disconnect() espConn = nil end
-            end)
+            if not connOk then
+                warn('[menu] Nelze pripojit ESP: ' .. tostring(connErr))
+            end
         elseif not active and espConn then
-            espConn:Disconnect()
+            pcall(function() espConn:Disconnect() end)
             espConn = nil
             removeAllESP()
         end
@@ -657,12 +613,10 @@ local espOk, espErr = pcall(function()
         Toggles[ESP_TOGGLES[i]]:OnChanged(refreshESP)
     end
 
-    local removingConn = Players.PlayerRemoving:Connect(removeESP)
-    addCleanup(function() removingConn:Disconnect() end)
+    Players.PlayerRemoving:Connect(removeESP)
 
     ESPCleanup = function()
-        if espConn then espConn:Disconnect() espConn = nil end
-        removingConn:Disconnect()
+        if espConn then pcall(function() espConn:Disconnect() end) espConn = nil end
         removeAllESP()
     end
 end)
@@ -684,22 +638,26 @@ local lastText = ''
 task.spawn(function()
     while not Library.Unloaded do
         task.wait(2)
-        if WatermarkEnabled and rs and Stats then
-            local fps = math.floor(1 / rs.RenderStepped:Wait())
-            local ping = 0
-            pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
-            local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))
-            if text ~= lastText then
-                lastText = text
-                Library:SetWatermark(text)
+        pcall(function()
+            if WatermarkEnabled then
+                local rs = game:GetService('RunService')
+                local fps = math.floor(1 / rs.RenderStepped:Wait())
+                local ping = 0
+                pcall(function() ping = Stats.Network.ServerStatsItem['Data Ping']:GetValue() end)
+                local text = ('LinoriaLib | %d fps | %d ms'):format(fps, math.floor(ping))
+                if text ~= lastText then
+                    lastText = text
+                    Library:SetWatermark(text)
+                end
             end
-        end
+        end)
     end
 end)
 
 Library:OnUnload(function()
     ESPCleanup()
-    pcall(env.__RivalsCleanup)
+    if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
+    Library.Unloaded = true
 end)
 
 ----------------------------------------------------------------
